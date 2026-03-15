@@ -41,3 +41,39 @@ run = "psql postgresql://postgres:postgres@localhost:5432/appdb"
 [tasks."session-1:db:logs"]
 description = "Tail session-1 Postgres container logs"
 run = "docker compose -f cmd/session-1/01-db/compose.yml logs -f postgres"
+
+# ---------------------------------------------------------------------------
+# Session-2: Debezium + Kafka Connect CDC Pipeline
+# ---------------------------------------------------------------------------
+
+[tasks."session-2:build"]
+description = "Build session-2 binary to bin/session-2"
+run = "go build -o bin/session-2 ./cmd/session-2"
+
+[tasks."session-2:dev"]
+description = "Start full session-2 stack (Temporal + Postgres 18 + Kafka + Debezium + app) via overmind"
+run = "overmind start -f Procfile.session-2"
+
+[tasks."session-2"]
+description = "Run session-2 control plane directly (requires Temporal dev server running)"
+run = "mise run session-2:build && bin/session-2"
+
+[tasks."session-2:test"]
+description = "Run session-2 unit and integration tests (no external deps)"
+run = "go test -race -v -count=1 ./internal/..."
+
+[tasks."session-2:db:up"]
+description = "Start Postgres 18 + Kafka + Debezium Connect containers for session-2 (detached)"
+run = "docker compose -f cmd/session-2/02-cdc/compose.yml up -d"
+
+[tasks."session-2:db:down"]
+description = "Stop and remove session-2 containers + volumes"
+run = "docker compose -f cmd/session-2/02-cdc/compose.yml down -v"
+
+[tasks."session-2:db:psql"]
+description = "Open psql against session-2 Postgres (port 5433)"
+run = "psql postgresql://postgres:postgres@localhost:5433/appdb"
+
+[tasks."session-2:db:logs"]
+description = "Tail session-2 container logs"
+run = "docker compose -f cmd/session-2/02-cdc/compose.yml logs -f"

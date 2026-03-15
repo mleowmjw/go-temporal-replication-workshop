@@ -193,6 +193,18 @@ func TestMarkPipelineActiveActivity(t *testing.T) {
 	assert.Equal(t, domain.StateActive, state)
 }
 
+func TestMarkPipelinePausedActivity(t *testing.T) {
+	acts, ms := newActivities(t)
+	spec := domain.PipelineSpec{TenantID: "t1", PipelineID: "p1"}
+	seedPipelineInStore(t, ms, spec)
+
+	require.NoError(t, acts.MarkPipelinePausedActivity(actCtx, spec))
+
+	state, err := ms.GetPipelineState(actCtx, "t1", "p1")
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatePaused, state)
+}
+
 func TestMarkPipelineErrorActivity(t *testing.T) {
 	acts, ms := newActivities(t)
 	spec := domain.PipelineSpec{TenantID: "t1", PipelineID: "p1"}

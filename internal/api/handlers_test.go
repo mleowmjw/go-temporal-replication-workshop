@@ -18,6 +18,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// denyAllAuthorizer rejects every request.
+type denyAllAuthorizer struct{}
+
+func (*denyAllAuthorizer) Authorize(_ *http.Request, _ domain.TenantID, _ string) error {
+	return errors.New("forbidden")
+}
+
 // fakeWorkflowStarter records calls for assertions.
 type fakeWorkflowStarter struct {
 	lastSpec   domain.PipelineSpec
@@ -187,6 +194,16 @@ func TestGetPipeline(t *testing.T) {
 		w := getRequest(t, mux, "/v1/tenants/t1/pipelines/missing")
 		assert.Equal(t, http.StatusNotFound, w.Code)
 	})
+}
+
+func TestGetPipeline_AuthFailure(t *testing.T) {
+	ms := store.NewInMemoryMetadataStore()
+	wf := &fakeWorkflowStarter{}
+	// Use a deny-all authorizer.
+	h := api.NewHandler(ms, wf, &denyAllAuthorizer{}, slog.Default())
+	mux := newMux(h)
+	w := getRequest(t, mux, "/v1/tenants/t1/pipelines/p1")
+	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
 func TestCreatePipeline_WorkflowFailure(t *testing.T) {

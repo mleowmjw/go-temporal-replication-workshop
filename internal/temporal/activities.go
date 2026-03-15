@@ -124,6 +124,11 @@ func (a *Activities) MarkPipelineActiveActivity(ctx context.Context, in MarkPipe
 	return a.deps.Store.SetPipelineState(ctx, in.Spec.TenantID, in.Spec.PipelineID, domain.StateActive)
 }
 
+// MarkPipelinePausedActivity marks the pipeline state as PAUSED.
+func (a *Activities) MarkPipelinePausedActivity(ctx context.Context, spec domain.PipelineSpec) error {
+	return a.deps.Store.SetPipelineState(ctx, spec.TenantID, spec.PipelineID, domain.StatePaused)
+}
+
 // StopCaptureActivity stops CDC capture (used in compensation and pause).
 func (a *Activities) StopCaptureActivity(ctx context.Context, h connectors.CaptureHandle) error {
 	return a.deps.CDC.StopCapture(ctx, h)

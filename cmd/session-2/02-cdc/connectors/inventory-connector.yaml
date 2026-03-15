@@ -1,0 +1,19 @@
+name: inventory-connector
+config:
+  connector.class: io.debezium.connector.postgresql.PostgresConnector
+  database.hostname: postgres
+  database.port: "5432"
+  database.user: dbz
+  database.password: dbz
+  database.dbname: appdb
+  topic.prefix: workshop
+  plugin.name: pgoutput
+  slot.name: workshop_inventory_slot
+  publication.name: workshop_inventory_pub
+  # Use the pre-created publication (not auto-create) so PG18 features are preserved.
+  publication.autocreate.mode: disabled
+  schema.include.list: inventory
+  table.include.list: inventory.customers,inventory.orders
+  snapshot.mode: initial
+  include.schema.changes: "false"
+  # PG18: streaming = parallel is the default in PG18; no override needed.

@@ -1,0 +1,23 @@
+# air config for session-2 hot-reload
+# Runs from workspace root (overmind cds to root before starting processes)
+root = "."
+tmp_dir = ".air-session-2"
+
+[build]
+  cmd        = "go build -o bin/session-2 ./cmd/session-2"
+  bin        = "bin/session-2"
+  full_bin   = "bin/session-2"
+  delay      = 1000
+  include_ext = ["go", "toml"]
+  include_dir = ["cmd/session-2", "internal"]
+  exclude_dir = [".air-session-2", ".temporal", "vendor", "node_modules"]
+
+[log]
+  time = true
+
+[color]
+  build  = "yellow"
+  runner = "green"
+
+[misc]
+  clean_on_exit = true
