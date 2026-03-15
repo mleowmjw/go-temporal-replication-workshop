@@ -160,7 +160,7 @@ func DecommissionCDCPipelineWorkflow(ctx workflow.Context, spec domain.PipelineS
 			return fmt.Errorf("delete stream: %w", err)
 		}
 	}
-	if err := workflow.ExecuteActivity(ctx, acts.MarkPipelineErrorActivity, spec).Get(ctx, nil); err != nil {
+	if err := workflow.ExecuteActivity(ctx, acts.MarkPipelineDecommissionedActivity, spec).Get(ctx, nil); err != nil {
 		return fmt.Errorf("mark decommissioned: %w", err)
 	}
 	return nil

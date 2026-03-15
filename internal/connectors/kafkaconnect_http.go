@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"app/internal/domain"
@@ -68,7 +69,7 @@ type kcConnectorStatusResponse struct {
 }
 
 func (c *HTTPKafkaConnectClient) GetConnectorStatus(ctx context.Context, name string) (domain.ConnectorStatus, error) {
-	resp, err := c.doRequest(ctx, http.MethodGet, "/connectors/"+name+"/status", nil)
+	resp, err := c.doRequest(ctx, http.MethodGet, connectorPath(name, "/status"), nil)
 	if err != nil {
 		return domain.ConnectorStatus{}, err
 	}
@@ -96,7 +97,7 @@ func (c *HTTPKafkaConnectClient) GetConnectorStatus(ctx context.Context, name st
 }
 
 func (c *HTTPKafkaConnectClient) DeleteConnector(ctx context.Context, name string) error {
-	resp, err := c.doRequest(ctx, http.MethodDelete, "/connectors/"+name, nil)
+	resp, err := c.doRequest(ctx, http.MethodDelete, connectorPath(name, ""), nil)
 	if err != nil {
 		return err
 	}
@@ -127,7 +128,7 @@ func (c *HTTPKafkaConnectClient) ListConnectors(ctx context.Context) ([]string, 
 }
 
 func (c *HTTPKafkaConnectClient) PauseConnector(ctx context.Context, name string) error {
-	resp, err := c.doRequest(ctx, http.MethodPut, "/connectors/"+name+"/pause", nil)
+	resp, err := c.doRequest(ctx, http.MethodPut, connectorPath(name, "/pause"), nil)
 	if err != nil {
 		return err
 	}
@@ -139,7 +140,7 @@ func (c *HTTPKafkaConnectClient) PauseConnector(ctx context.Context, name string
 }
 
 func (c *HTTPKafkaConnectClient) ResumeConnector(ctx context.Context, name string) error {
-	resp, err := c.doRequest(ctx, http.MethodPut, "/connectors/"+name+"/resume", nil)
+	resp, err := c.doRequest(ctx, http.MethodPut, connectorPath(name, "/resume"), nil)
 	if err != nil {
 		return err
 	}
@@ -168,4 +169,8 @@ func (c *HTTPKafkaConnectClient) doRequest(ctx context.Context, method, path str
 func (c *HTTPKafkaConnectClient) responseError(op string, resp *http.Response) error {
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 	return fmt.Errorf("%s: HTTP %d: %s", op, resp.StatusCode, string(b))
+}
+
+func connectorPath(name, suffix string) string {
+	return "/connectors/" + url.PathEscape(name) + suffix
 }

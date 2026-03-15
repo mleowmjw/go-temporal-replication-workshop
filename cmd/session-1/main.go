@@ -45,7 +45,7 @@ func run(log *slog.Logger) error {
 	// --- Temporal client ---
 	tc, err := client.Dial(client.Options{
 		HostPort: temporalAddr,
-		Logger:   newTemporalLogger(log),
+		Logger:   apptemporal.NewSDKLogger(log),
 	})
 	if err != nil {
 		return fmt.Errorf("dial temporal: %w", err)
@@ -67,19 +67,7 @@ func run(log *slog.Logger) error {
 		BuildID:                 apptemporal.WorkerBuildID,
 		UseBuildIDForVersioning: true,
 	})
-	w.RegisterWorkflow(apptemporal.ProvisionPipelineWorkflow)
-	w.RegisterActivity(acts.ValidatePipelineSpecActivity)
-	w.RegisterActivity(acts.ValidateSchemaPolicyActivity)
-	w.RegisterActivity(acts.EnsureSchemaSubjectActivity)
-	w.RegisterActivity(acts.PrepareSourceActivity)
-	w.RegisterActivity(acts.EnsureStreamActivity)
-	w.RegisterActivity(acts.EnsureSinkActivity)
-	w.RegisterActivity(acts.StartCaptureActivity)
-	w.RegisterActivity(acts.MarkPipelineActiveActivity)
-	w.RegisterActivity(acts.StopCaptureActivity)
-	w.RegisterActivity(acts.DeleteSinkActivity)
-	w.RegisterActivity(acts.DeleteStreamActivity)
-	w.RegisterActivity(acts.MarkPipelineErrorActivity)
+	apptemporal.RegisterSession1Worker(w, acts)
 
 	if err := w.Start(); err != nil {
 		return fmt.Errorf("start worker: %w", err)
@@ -135,28 +123,6 @@ func (s *temporalWorkflowStarter) StartProvisionWorkflow(ctx context.Context, sp
 		return "", fmt.Errorf("execute workflow: %w", err)
 	}
 	return run.GetID(), nil
-}
-
-// temporalLogger adapts slog to the Temporal SDK Logger interface.
-type temporalLogger struct {
-	log *slog.Logger
-}
-
-func newTemporalLogger(log *slog.Logger) *temporalLogger {
-	return &temporalLogger{log: log}
-}
-
-func (l *temporalLogger) Debug(msg string, keyvals ...any) {
-	l.log.Debug(msg, keyvals...)
-}
-func (l *temporalLogger) Info(msg string, keyvals ...any) {
-	l.log.Info(msg, keyvals...)
-}
-func (l *temporalLogger) Warn(msg string, keyvals ...any) {
-	l.log.Warn(msg, keyvals...)
-}
-func (l *temporalLogger) Error(msg string, keyvals ...any) {
-	l.log.Error(msg, keyvals...)
 }
 
 func envOr(key, fallback string) string {

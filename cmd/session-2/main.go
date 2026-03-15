@@ -17,6 +17,7 @@ import (
 	"app/internal/store"
 	apptemporal "app/internal/temporal"
 
+	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
 )
@@ -49,7 +50,7 @@ func run(log *slog.Logger) error {
 	// --- Temporal client ---
 	tc, err := client.Dial(client.Options{
 		HostPort: temporalAddr,
-		Logger:   newTemporalLogger(log),
+		Logger:   apptemporal.NewSDKLogger(log),
 	})
 	if err != nil {
 		return fmt.Errorf("dial temporal: %w", err)
@@ -78,33 +79,7 @@ func run(log *slog.Logger) error {
 		BuildID:                 apptemporal.WorkerBuildIDV2,
 		UseBuildIDForVersioning: true,
 	})
-
-	// Register session-1 activities (reused).
-	w.RegisterWorkflow(apptemporal.ProvisionPipelineWorkflow)
-	w.RegisterActivity(acts.ValidatePipelineSpecActivity)
-	w.RegisterActivity(acts.ValidateSchemaPolicyActivity)
-	w.RegisterActivity(acts.EnsureSchemaSubjectActivity)
-	w.RegisterActivity(acts.PrepareSourceActivity)
-	w.RegisterActivity(acts.EnsureStreamActivity)
-	w.RegisterActivity(acts.EnsureSinkActivity)
-	w.RegisterActivity(acts.StartCaptureActivity)
-	w.RegisterActivity(acts.MarkPipelineActiveActivity)
-	w.RegisterActivity(acts.MarkPipelinePausedActivity)
-	w.RegisterActivity(acts.StopCaptureActivity)
-	w.RegisterActivity(acts.DeleteSinkActivity)
-	w.RegisterActivity(acts.DeleteStreamActivity)
-	w.RegisterActivity(acts.MarkPipelineErrorActivity)
-
-	// Register session-2 workflows + activities.
-	w.RegisterWorkflow(apptemporal.ProvisionCDCPipelineWorkflow)
-	w.RegisterWorkflow(apptemporal.PauseCDCPipelineWorkflow)
-	w.RegisterWorkflow(apptemporal.ResumeCDCPipelineWorkflow)
-	w.RegisterWorkflow(apptemporal.DecommissionCDCPipelineWorkflow)
-	w.RegisterActivity(s2acts.CreateConnectorActivity)
-	w.RegisterActivity(s2acts.WaitForConnectorRunningActivity)
-	w.RegisterActivity(s2acts.DeleteConnectorActivity)
-	w.RegisterActivity(s2acts.PauseConnectorActivity)
-	w.RegisterActivity(s2acts.ResumeConnectorActivity)
+	apptemporal.RegisterSession2Worker(w, acts, s2acts)
 
 	if err := w.Start(); err != nil {
 		return fmt.Errorf("start worker: %w", err)
@@ -160,79 +135,73 @@ type temporalSession2Starter struct {
 	client client.Client
 }
 
-func (s *temporalSession2Starter) StartProvisionWorkflow(ctx context.Context, spec domain.PipelineSpec) (string, error) {
-	opts := client.StartWorkflowOptions{
-		ID:        fmt.Sprintf("provision-%s-%s", spec.TenantID, spec.PipelineID),
+func (s *temporalSession2Starter) executeWorkflow(ctx context.Context, opts client.StartWorkflowOptions, wf any, args ...any) (string, error) {
+	run, err := s.client.ExecuteWorkflow(ctx, opts, wf, args...)
+	if err != nil {
+		return "", err
+	}
+	return run.GetID(), nil
+}
+
+func startOptions(id string) client.StartWorkflowOptions {
+	return client.StartWorkflowOptions{
+		ID:        id,
 		TaskQueue: apptemporal.DefaultTaskQueue,
 	}
-	run, err := s.client.ExecuteWorkflow(ctx, opts, apptemporal.ProvisionPipelineWorkflow, spec)
+}
+
+func reusableStartOptions(id string) client.StartWorkflowOptions {
+	return client.StartWorkflowOptions{
+		ID:                    id,
+		TaskQueue:             apptemporal.DefaultTaskQueue,
+		WorkflowIDReusePolicy: enumspb.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
+	}
+}
+
+func (s *temporalSession2Starter) StartProvisionWorkflow(ctx context.Context, spec domain.PipelineSpec) (string, error) {
+	id := fmt.Sprintf("provision-%s-%s", spec.TenantID, spec.PipelineID)
+	runID, err := s.executeWorkflow(ctx, startOptions(id), apptemporal.ProvisionPipelineWorkflow, spec)
 	if err != nil {
 		return "", fmt.Errorf("execute provision workflow: %w", err)
 	}
-	return run.GetID(), nil
+	return runID, nil
 }
 
 func (s *temporalSession2Starter) StartProvisionCDCWorkflow(ctx context.Context, spec domain.PipelineSpec, cfg domain.ConnectorConfig) (string, error) {
-	opts := client.StartWorkflowOptions{
-		ID:        fmt.Sprintf("cdc-provision-%s-%s", spec.TenantID, spec.PipelineID),
-		TaskQueue: apptemporal.DefaultTaskQueue,
-	}
-	run, err := s.client.ExecuteWorkflow(ctx, opts, apptemporal.ProvisionCDCPipelineWorkflow, spec, cfg)
+	id := fmt.Sprintf("cdc-provision-%s-%s", spec.TenantID, spec.PipelineID)
+	runID, err := s.executeWorkflow(ctx, startOptions(id), apptemporal.ProvisionCDCPipelineWorkflow, spec, cfg)
 	if err != nil {
 		return "", fmt.Errorf("execute CDC provision workflow: %w", err)
 	}
-	return run.GetID(), nil
+	return runID, nil
 }
 
 func (s *temporalSession2Starter) StartDeleteConnectorWorkflow(ctx context.Context, spec domain.PipelineSpec, connectorName string) (string, error) {
-	opts := client.StartWorkflowOptions{
-		ID:        fmt.Sprintf("decommission-cdc-%s-%s", spec.TenantID, spec.PipelineID),
-		TaskQueue: apptemporal.DefaultTaskQueue,
-	}
-	run, err := s.client.ExecuteWorkflow(ctx, opts, apptemporal.DecommissionCDCPipelineWorkflow, spec, connectorName, "", "")
+	id := fmt.Sprintf("decommission-cdc-%s-%s", spec.TenantID, spec.PipelineID)
+	runID, err := s.executeWorkflow(ctx, reusableStartOptions(id), apptemporal.DecommissionCDCPipelineWorkflow, spec, connectorName, "", "")
 	if err != nil {
 		return "", fmt.Errorf("execute decommission workflow: %w", err)
 	}
-	return run.GetID(), nil
+	return runID, nil
 }
 
 func (s *temporalSession2Starter) StartPauseConnectorWorkflow(ctx context.Context, spec domain.PipelineSpec, connectorName string) (string, error) {
-	opts := client.StartWorkflowOptions{
-		ID:        fmt.Sprintf("pause-cdc-%s-%s-%s", spec.TenantID, spec.PipelineID, connectorName),
-		TaskQueue: apptemporal.DefaultTaskQueue,
-	}
-	run, err := s.client.ExecuteWorkflow(ctx, opts, apptemporal.PauseCDCPipelineWorkflow, spec, connectorName)
+	id := fmt.Sprintf("pause-cdc-%s-%s-%s", spec.TenantID, spec.PipelineID, connectorName)
+	runID, err := s.executeWorkflow(ctx, reusableStartOptions(id), apptemporal.PauseCDCPipelineWorkflow, spec, connectorName)
 	if err != nil {
 		return "", fmt.Errorf("execute pause workflow: %w", err)
 	}
-	return run.GetID(), nil
+	return runID, nil
 }
 
 func (s *temporalSession2Starter) StartResumeConnectorWorkflow(ctx context.Context, spec domain.PipelineSpec, connectorName string) (string, error) {
-	opts := client.StartWorkflowOptions{
-		ID:        fmt.Sprintf("resume-cdc-%s-%s-%s", spec.TenantID, spec.PipelineID, connectorName),
-		TaskQueue: apptemporal.DefaultTaskQueue,
-	}
-	run, err := s.client.ExecuteWorkflow(ctx, opts, apptemporal.ResumeCDCPipelineWorkflow, spec, connectorName)
+	id := fmt.Sprintf("resume-cdc-%s-%s-%s", spec.TenantID, spec.PipelineID, connectorName)
+	runID, err := s.executeWorkflow(ctx, reusableStartOptions(id), apptemporal.ResumeCDCPipelineWorkflow, spec, connectorName)
 	if err != nil {
 		return "", fmt.Errorf("execute resume workflow: %w", err)
 	}
-	return run.GetID(), nil
+	return runID, nil
 }
-
-// temporalLogger adapts slog to the Temporal SDK Logger interface.
-type temporalLogger struct {
-	log *slog.Logger
-}
-
-func newTemporalLogger(log *slog.Logger) *temporalLogger {
-	return &temporalLogger{log: log}
-}
-
-func (l *temporalLogger) Debug(msg string, keyvals ...any) { l.log.Debug(msg, keyvals...) }
-func (l *temporalLogger) Info(msg string, keyvals ...any)  { l.log.Info(msg, keyvals...) }
-func (l *temporalLogger) Warn(msg string, keyvals ...any)  { l.log.Warn(msg, keyvals...) }
-func (l *temporalLogger) Error(msg string, keyvals ...any) { l.log.Error(msg, keyvals...) }
 
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {

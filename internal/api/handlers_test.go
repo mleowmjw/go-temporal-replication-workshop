@@ -217,6 +217,10 @@ func TestCreatePipeline_WorkflowFailure(t *testing.T) {
 
 	w := postJSON(t, mux, "/v1/tenants/t1/pipelines", validPipelineBody())
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
+
+	state, err := ms.GetPipelineState(context.Background(), "t1", "p1")
+	require.NoError(t, err)
+	assert.Equal(t, domain.StateError, state)
 }
 
 func TestNewHandler_NilDefaults(t *testing.T) {

@@ -141,6 +141,10 @@ func (h *Handler) createPipeline(w http.ResponseWriter, r *http.Request) {
 
 	workflowID, err := h.Workflows.StartProvisionWorkflow(r.Context(), spec)
 	if err != nil {
+		// Best-effort state correction: pipeline metadata was created already.
+		if setErr := h.Store.SetPipelineState(r.Context(), tenantID, spec.PipelineID, domain.StateError); setErr != nil {
+			h.Log.Error("failed to mark pipeline ERROR after workflow start failure", "error", setErr)
+		}
 		h.Log.Error("failed to start provision workflow", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to start provisioning")
 		return
@@ -155,21 +159,15 @@ func (h *Handler) createPipeline(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getPipeline(w http.ResponseWriter, r *http.Request) {
-	tenantID := domain.TenantID(r.PathValue("tenant"))
-	pipelineID := domain.PipelineID(r.PathValue("pipeline"))
+	tenantID, pipelineID := tenantPipelinePathValues(r)
 
 	if err := h.Auth.Authorize(r, tenantID, "pipeline:get"); err != nil {
 		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
 
-	spec, err := h.Store.GetPipeline(r.Context(), tenantID, pipelineID)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, err.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+	spec, ok := getPipelineOrWriteError(w, r, h.Store, tenantID, pipelineID)
+	if !ok {
 		return
 	}
 
@@ -209,4 +207,25 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func tenantPipelinePathValues(r *http.Request) (domain.TenantID, domain.PipelineID) {
+	return domain.TenantID(r.PathValue("tenant")), domain.PipelineID(r.PathValue("pipeline"))
+}
+
+func writeLookupError(w http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeError(w, http.StatusInternalServerError, err.Error())
+}
+
+func getPipelineOrWriteError(w http.ResponseWriter, r *http.Request, s store.MetadataStore, tenantID domain.TenantID, pipelineID domain.PipelineID) (domain.PipelineSpec, bool) {
+	spec, err := s.GetPipeline(r.Context(), tenantID, pipelineID)
+	if err != nil {
+		writeLookupError(w, err)
+		return domain.PipelineSpec{}, false
+	}
+	return spec, true
 }

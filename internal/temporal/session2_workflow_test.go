@@ -78,6 +78,7 @@ func (s *cdcWorkflowSuite) registerAllActivities(acts *apptemporal.Activities, s
 	s.env.RegisterActivity(acts.StartCaptureActivity)
 	s.env.RegisterActivity(acts.MarkPipelineActiveActivity)
 	s.env.RegisterActivity(acts.MarkPipelinePausedActivity)
+	s.env.RegisterActivity(acts.MarkPipelineDecommissionedActivity)
 	s.env.RegisterActivity(acts.StopCaptureActivity)
 	s.env.RegisterActivity(acts.DeleteSinkActivity)
 	s.env.RegisterActivity(acts.DeleteStreamActivity)
@@ -237,6 +238,10 @@ func (s *cdcWorkflowSuite) TestCDCDecommissionWorkflow() {
 
 	s.True(s.env.IsWorkflowCompleted())
 	require.NoError(s.T(), s.env.GetWorkflowError())
+
+	state, err := ms.GetPipelineState(context.Background(), "t1", "p1")
+	require.NoError(s.T(), err)
+	assert.Equal(s.T(), domain.StateDecommissioned, state)
 }
 
 // TestCDCPauseResumeWorkflow verifies pause/resume round-trip.

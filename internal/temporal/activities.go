@@ -129,6 +129,11 @@ func (a *Activities) MarkPipelinePausedActivity(ctx context.Context, spec domain
 	return a.deps.Store.SetPipelineState(ctx, spec.TenantID, spec.PipelineID, domain.StatePaused)
 }
 
+// MarkPipelineDecommissionedActivity marks the pipeline state as DECOMMISSIONED.
+func (a *Activities) MarkPipelineDecommissionedActivity(ctx context.Context, spec domain.PipelineSpec) error {
+	return a.deps.Store.SetPipelineState(ctx, spec.TenantID, spec.PipelineID, domain.StateDecommissioned)
+}
+
 // StopCaptureActivity stops CDC capture (used in compensation and pause).
 func (a *Activities) StopCaptureActivity(ctx context.Context, h connectors.CaptureHandle) error {
 	return a.deps.CDC.StopCapture(ctx, h)

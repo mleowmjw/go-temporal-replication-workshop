@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"errors"
 	"net/http"
 
 	"app/internal/domain"
@@ -63,8 +62,7 @@ type connectorDetailResponse struct {
 // --- Handlers ---
 
 func (h *ConnectorHandler) createConnector(w http.ResponseWriter, r *http.Request) {
-	tenantID := domain.TenantID(r.PathValue("tenant"))
-	pipelineID := domain.PipelineID(r.PathValue("pipeline"))
+	tenantID, pipelineID := tenantPipelinePathValues(r)
 
 	if err := h.Auth.Authorize(r, tenantID, "connector:create"); err != nil {
 		writeError(w, http.StatusForbidden, err.Error())
@@ -80,13 +78,8 @@ func (h *ConnectorHandler) createConnector(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	spec, err := h.Store.GetPipeline(r.Context(), tenantID, pipelineID)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, err.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+	spec, ok := getPipelineOrWriteError(w, r, h.Store, tenantID, pipelineID)
+	if !ok {
 		return
 	}
 
@@ -105,8 +98,7 @@ func (h *ConnectorHandler) createConnector(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *ConnectorHandler) listConnectors(w http.ResponseWriter, r *http.Request) {
-	tenantID := domain.TenantID(r.PathValue("tenant"))
-	pipelineID := domain.PipelineID(r.PathValue("pipeline"))
+	tenantID, pipelineID := tenantPipelinePathValues(r)
 
 	if err := h.Auth.Authorize(r, tenantID, "connector:list"); err != nil {
 		writeError(w, http.StatusForbidden, err.Error())
@@ -127,8 +119,7 @@ func (h *ConnectorHandler) listConnectors(w http.ResponseWriter, r *http.Request
 }
 
 func (h *ConnectorHandler) getConnector(w http.ResponseWriter, r *http.Request) {
-	tenantID := domain.TenantID(r.PathValue("tenant"))
-	pipelineID := domain.PipelineID(r.PathValue("pipeline"))
+	tenantID, pipelineID := tenantPipelinePathValues(r)
 	connectorName := r.PathValue("connector")
 
 	if err := h.Auth.Authorize(r, tenantID, "connector:get"); err != nil {
@@ -138,11 +129,7 @@ func (h *ConnectorHandler) getConnector(w http.ResponseWriter, r *http.Request) 
 
 	rec, err := h.ConnectorStore.GetConnector(r.Context(), tenantID, pipelineID, connectorName)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, err.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeLookupError(w, err)
 		return
 	}
 
@@ -155,8 +142,7 @@ func (h *ConnectorHandler) getConnector(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *ConnectorHandler) deleteConnector(w http.ResponseWriter, r *http.Request) {
-	tenantID := domain.TenantID(r.PathValue("tenant"))
-	pipelineID := domain.PipelineID(r.PathValue("pipeline"))
+	tenantID, pipelineID := tenantPipelinePathValues(r)
 	connectorName := r.PathValue("connector")
 
 	if err := h.Auth.Authorize(r, tenantID, "connector:delete"); err != nil {
@@ -164,13 +150,8 @@ func (h *ConnectorHandler) deleteConnector(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	spec, err := h.Store.GetPipeline(r.Context(), tenantID, pipelineID)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, err.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+	spec, ok := getPipelineOrWriteError(w, r, h.Store, tenantID, pipelineID)
+	if !ok {
 		return
 	}
 
@@ -183,8 +164,7 @@ func (h *ConnectorHandler) deleteConnector(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *ConnectorHandler) pauseConnector(w http.ResponseWriter, r *http.Request) {
-	tenantID := domain.TenantID(r.PathValue("tenant"))
-	pipelineID := domain.PipelineID(r.PathValue("pipeline"))
+	tenantID, pipelineID := tenantPipelinePathValues(r)
 	connectorName := r.PathValue("connector")
 
 	if err := h.Auth.Authorize(r, tenantID, "connector:pause"); err != nil {
@@ -192,13 +172,8 @@ func (h *ConnectorHandler) pauseConnector(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	spec, err := h.Store.GetPipeline(r.Context(), tenantID, pipelineID)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, err.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+	spec, ok := getPipelineOrWriteError(w, r, h.Store, tenantID, pipelineID)
+	if !ok {
 		return
 	}
 
@@ -211,8 +186,7 @@ func (h *ConnectorHandler) pauseConnector(w http.ResponseWriter, r *http.Request
 }
 
 func (h *ConnectorHandler) resumeConnector(w http.ResponseWriter, r *http.Request) {
-	tenantID := domain.TenantID(r.PathValue("tenant"))
-	pipelineID := domain.PipelineID(r.PathValue("pipeline"))
+	tenantID, pipelineID := tenantPipelinePathValues(r)
 	connectorName := r.PathValue("connector")
 
 	if err := h.Auth.Authorize(r, tenantID, "connector:resume"); err != nil {
@@ -220,13 +194,8 @@ func (h *ConnectorHandler) resumeConnector(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	spec, err := h.Store.GetPipeline(r.Context(), tenantID, pipelineID)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, err.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+	spec, ok := getPipelineOrWriteError(w, r, h.Store, tenantID, pipelineID)
+	if !ok {
 		return
 	}
 
