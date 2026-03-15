@@ -7,6 +7,8 @@
 *.dll
 *.so
 *.dylib
+bin/
+
 
 # Test binary, built with `go test -c`
 *.test
@@ -41,5 +43,11 @@ mise.local.toml
 ARCHIVE
 EXPERIMENTS
 
-# Ignore varlock; avoid use of .env if psosible ..
+# Temporal dev server database
+.temporal/
+
+# air hot-reload build artefacts (one dir per session)
+.air-session-*/
+
+# Ignore varlock; avoid use of .env if possible ..
 

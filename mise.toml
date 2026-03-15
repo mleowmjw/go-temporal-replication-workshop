@@ -1,4 +1,43 @@
 [env]
 CGO_ENABLED = "0"
+_.path = ["~/go/bin"]
 _.file = ".env"
 
+[tools]
+go = "1.26"
+
+# ---------------------------------------------------------------------------
+# Session-1: Domain Foundation + Basic Provisioning Workflow
+# ---------------------------------------------------------------------------
+
+[tasks."session-1:build"]
+description = "Build session-1 binary to bin/session-1"
+run = "go build -o bin/session-1 ./cmd/session-1"
+
+[tasks."session-1:dev"]
+description = "Start full session-1 stack (Temporal + Postgres 18 + app) via overmind"
+run = "overmind start -f Procfile.session-1"
+
+[tasks."session-1"]
+description = "Run session-1 control plane directly (requires Temporal dev server running)"
+run = "mise run session-1:build && bin/session-1"
+
+[tasks."session-1:test"]
+description = "Run session-1 unit and integration tests (no external deps)"
+run = "go test -race -v -count=1 ./internal/..."
+
+[tasks."session-1:db:up"]
+description = "Start Postgres 18 container for session-1 (detached)"
+run = "docker compose -f cmd/session-1/01-db/compose.yml up -d"
+
+[tasks."session-1:db:down"]
+description = "Stop and remove session-1 Postgres container + volumes"
+run = "docker compose -f cmd/session-1/01-db/compose.yml down -v"
+
+[tasks."session-1:db:psql"]
+description = "Open psql against session-1 Postgres"
+run = "psql postgresql://postgres:postgres@localhost:5432/appdb"
+
+[tasks."session-1:db:logs"]
+description = "Tail session-1 Postgres container logs"
+run = "docker compose -f cmd/session-1/01-db/compose.yml logs -f postgres"

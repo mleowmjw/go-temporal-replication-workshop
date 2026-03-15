@@ -1,0 +1,24 @@
+# air config for session-1 hot-reload
+# Runs from workspace root (overmind cds to root before starting processes)
+root = "."
+tmp_dir = ".air-session-1"
+
+[build]
+  cmd        = "go build -o bin/session-1 ./cmd/session-1"
+  bin        = "bin/session-1"
+  full_bin   = "bin/session-1"
+  delay      = 1000
+  # Watch Go source and toml config changes
+  include_ext = ["go", "toml"]
+  include_dir = ["cmd/session-1", "internal"]
+  exclude_dir = [".air-session-1", ".temporal", "vendor", "node_modules"]
+
+[log]
+  time = true
+
+[color]
+  build  = "yellow"
+  runner = "green"
+
+[misc]
+  clean_on_exit = true

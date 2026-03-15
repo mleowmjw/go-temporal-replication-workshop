@@ -1,0 +1,10 @@
+# Session-1 process stack — run with: overmind start -f Procfile.session-1
+#
+# Processes (all run from workspace root):
+#   temporal  — Temporal dev server (SQLite, metrics on :8077)
+#   postgres  — PostgreSQL 18 container (CDC-ready, foreground via compose)
+#   app       — Session-1 control plane with air hot-reload
+
+temporal: mkdir -p .temporal && temporal server start-dev --db-filename .temporal/temporal.db --metrics-port 8077
+postgres: docker compose -f cmd/session-1/01-db/compose.yml up
+app: air -c cmd/session-1/.air.toml
