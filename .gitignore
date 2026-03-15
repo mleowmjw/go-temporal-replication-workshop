@@ -28,5 +28,18 @@ go.work.sum
 .env
 
 # Editor/IDE
-# .idea/
-# .vscode/
+.idea/
+.vscode/
+
+# Ignore Dirwenv
+.envrc*
+
+# Ignore mise
+mise.local.toml
+
+# Ignore ARCHIVE + EXPERIMENTS
+ARCHIVE
+EXPERIMENTS
+
+# Ignore varlock; avoid use of .env if psosible ..
+

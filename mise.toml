@@ -1,0 +1,4 @@
+[env]
+CGO_ENABLED = "0"
+_.file = ".env"
+
