@@ -19,6 +19,13 @@ func RegisterSession1Worker(w worker.Worker, acts *Activities) {
 	w.RegisterActivity(acts.MarkPipelineErrorActivity)
 }
 
+// RegisterSession3Worker registers session-3 workflows and activities.
+// It includes all session-2 registrations; session-3 adds no new workflow logic
+// (observability is wired outside Temporal).
+func RegisterSession3Worker(w worker.Worker, acts *Activities, s2acts *Session2Activities) {
+	RegisterSession2Worker(w, acts, s2acts)
+}
+
 // RegisterSession2Worker registers session-2 workflows and activities.
 // It includes all session-1 registrations plus session-2 CDC operations.
 func RegisterSession2Worker(w worker.Worker, acts *Activities, s2acts *Session2Activities) {

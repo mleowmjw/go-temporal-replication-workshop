@@ -1,0 +1,23 @@
+# air config for session-3 hot-reload
+# Runs from workspace root (overmind cds to root before starting processes)
+root = "."
+tmp_dir = ".air-session-3"
+
+[build]
+  cmd        = "go build -o bin/session-3 ./cmd/session-3"
+  bin        = "bin/session-3"
+  full_bin   = "bin/session-3"
+  delay      = 1000
+  include_ext = ["go", "toml"]
+  include_dir = ["cmd/session-3", "internal"]
+  exclude_dir = [".air-session-3", ".temporal", "vendor", "node_modules"]
+
+[log]
+  time = true
+
+[color]
+  build  = "yellow"
+  runner = "green"
+
+[misc]
+  clean_on_exit = true

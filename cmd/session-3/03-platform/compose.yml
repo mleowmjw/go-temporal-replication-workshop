@@ -1,0 +1,38 @@
+services:
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.114.0
+    container_name: ws3-victoriametrics
+    ports:
+      - "8428:8428"
+    command:
+      - --storageDataPath=/storage
+
+  vmagent:
+    image: victoriametrics/vmagent:v1.114.0
+    container_name: ws3-vmagent
+    depends_on:
+      - victoriametrics
+    ports:
+      - "8429:8429"
+    command:
+      - -promscrape.config=/etc/vmagent/vmagent.yml
+      - -remoteWrite.url=http://victoriametrics:8428/api/v1/write
+    volumes:
+      - ./observability/vmagent.yml:/etc/vmagent/vmagent.yml:ro
+
+  victorialogs:
+    image: victoriametrics/victoria-logs:v1.25.0
+    container_name: ws3-victorialogs
+    ports:
+      - "9428:9428"
+    command:
+      - --storageDataPath=/vlogs
+
+  vector:
+    image: timberio/vector:0.38.0-alpine
+    container_name: ws3-vector
+    depends_on:
+      - victorialogs
+    volumes:
+      - ./observability/vector.yaml:/etc/vector/vector.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock

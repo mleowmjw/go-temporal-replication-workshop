@@ -1,0 +1,30 @@
+sources:
+  docker_logs:
+    type: docker_logs
+
+transforms:
+  enrich_logs:
+    type: remap
+    inputs:
+      - docker_logs
+    source: |
+      .service = .label."com.docker.compose.service" ?? "unknown"
+      .container_name = .container_name ?? "unknown"
+      .timestamp = .timestamp ?? now()
+
+sinks:
+  victorialogs:
+    type: elasticsearch
+    inputs:
+      - enrich_logs
+    endpoints:
+      - http://victorialogs:9428/insert/elasticsearch/
+    api_version: v8
+    mode: bulk
+    compression: gzip
+    healthcheck:
+      enabled: false
+    query:
+      _msg_field: message
+      _time_field: timestamp
+      _stream_fields: service,container_name

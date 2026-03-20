@@ -1,0 +1,12 @@
+# Session-3 process stack — run with: overmind start -f Procfile.session-3
+#
+# Processes (all run from workspace root):
+#   temporal      — Temporal dev server (SQLite, metrics on :8077)
+#   cdc           — PostgreSQL 18 + Kafka + Debezium Connect (foreground via compose)
+#   observability — VictoriaMetrics + vmagent + VictoriaLogs + Vector (foreground)
+#   app           — Session-3 control plane with air hot-reload
+
+temporal: mkdir -p .temporal && temporal server start-dev --db-filename .temporal/temporal.db --metrics-port 8077
+cdc: docker compose -f cmd/session-3/02-cdc/compose.yml up
+observability: docker compose -f cmd/session-3/03-platform/compose.yml up
+app: air -c cmd/session-3/.air.toml

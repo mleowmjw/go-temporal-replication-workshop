@@ -11,6 +11,9 @@ const (
 
 	// WorkerBuildIDV2 identifies the session-2 binary version.
 	WorkerBuildIDV2 = "session-2-v1"
+
+	// WorkerBuildIDV3 identifies the session-3 binary version.
+	WorkerBuildIDV3 = "session-3-v1"
 )
 
 // TenantTaskQueue returns the per-tenant task queue name.

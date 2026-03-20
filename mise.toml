@@ -77,3 +77,51 @@ run = "psql postgresql://postgres:postgres@localhost:5433/appdb"
 [tasks."session-2:db:logs"]
 description = "Tail session-2 container logs"
 run = "docker compose -f cmd/session-2/02-cdc/compose.yml logs -f"
+
+# ---------------------------------------------------------------------------
+# Session-3: Temporal Observability (Prometheus metrics + audit trail)
+# ---------------------------------------------------------------------------
+
+[tasks."session-3:build"]
+description = "Build session-3 binary to bin/session-3"
+run = "go build -o bin/session-3 ./cmd/session-3"
+
+[tasks."session-3:dev"]
+description = "Start full session-3 stack (Temporal + CDC + Observability + app) via overmind"
+run = "overmind start -f Procfile.session-3"
+
+[tasks."session-3"]
+description = "Run session-3 control plane directly (requires Temporal dev server running)"
+run = "mise run session-3:build && bin/session-3"
+
+[tasks."session-3:test"]
+description = "Run session-3 unit and integration tests (no external deps)"
+run = "go test -race -v -count=1 ./internal/..."
+
+[tasks."session-3:db:up"]
+description = "Start Postgres 18 + Kafka + Debezium Connect containers for session-3 (detached)"
+run = "docker compose -f cmd/session-3/02-cdc/compose.yml up -d"
+
+[tasks."session-3:db:down"]
+description = "Stop and remove session-3 CDC containers + volumes"
+run = "docker compose -f cmd/session-3/02-cdc/compose.yml down -v"
+
+[tasks."session-3:db:psql"]
+description = "Open psql against session-3 Postgres (port 5434)"
+run = "psql postgresql://postgres:postgres@localhost:5434/appdb"
+
+[tasks."session-3:db:logs"]
+description = "Tail session-3 container logs"
+run = "docker compose -f cmd/session-3/02-cdc/compose.yml logs -f"
+
+[tasks."session-3:obs:up"]
+description = "Start session-3 observability stack (VictoriaMetrics + vmagent + VictoriaLogs + Vector)"
+run = "docker compose -f cmd/session-3/03-platform/compose.yml up -d"
+
+[tasks."session-3:obs:down"]
+description = "Stop session-3 observability stack"
+run = "docker compose -f cmd/session-3/03-platform/compose.yml down -v"
+
+[tasks."session-3:obs:logs"]
+description = "Tail session-3 observability container logs"
+run = "docker compose -f cmd/session-3/03-platform/compose.yml logs -f"
