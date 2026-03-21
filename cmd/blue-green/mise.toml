@@ -1,0 +1,155 @@
+# Self-contained mise config for the Blue-Green workshop.
+# Run all commands from this directory: cd cmd/blue-green
+#
+# Usage:
+#   mise run setup      — check prerequisites (start here!)
+#   mise run test       — run all workshop tests (no Docker needed)
+#   mise run dev        — start the full stack (Temporal + Postgres + app)
+#   mise run db:up      — start only Postgres (port 5435)
+#   mise run db:down    — stop and remove Postgres + volumes
+#   mise run db:psql    — open a psql prompt
+#   mise run teardown   — stop everything and clean up
+
+# workspace root — all build/test commands run from here
+[settings]
+cd = "{{config_root}}/../.."
+
+[env]
+CGO_ENABLED = "0"
+_.path = ["~/go/bin"]
+
+[tools]
+go = "1.26"
+
+# ── Prerequisites check ──────────────────────────────────────────────────────
+
+[tasks.setup]
+description = "Check all prerequisites for the blue-green workshop"
+run = """
+set -e
+# mise task scripts are not interactive shells, so extend PATH to cover all
+# common install locations: homebrew (Mac), go install, user-local, system.
+export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/go/bin"
+
+PASS="✅"
+FAIL="❌"
+WARN="⚠️ "
+OK=true
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Blue-Green Workshop — Prerequisites Check"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+# Go
+if go version >/dev/null 2>&1; then
+  echo "$PASS Go   $(go version | awk '{print $3}')"
+else
+  echo "$FAIL Go   not found — install from https://go.dev/dl/ or run: mise install"
+  OK=false
+fi
+
+# Docker
+if docker info >/dev/null 2>&1; then
+  echo "$PASS Docker   running"
+else
+  echo "$FAIL Docker   not running — start Docker Desktop and try again"
+  OK=false
+fi
+
+# temporal CLI
+if temporal version >/dev/null 2>&1; then
+  echo "$PASS temporal   $(temporal version 2>&1 | head -1)"
+else
+  echo "$WARN temporal CLI   not found"
+  echo "      Install: brew install temporal  (Mac)"
+  echo "               curl -sSf https://temporal.download/cli.sh | sh  (Linux)"
+  echo "               winget install Temporal.TemporalCLI  (Windows)"
+  OK=false
+fi
+
+# overmind (optional — only needed for 'mise run dev')
+if overmind version >/dev/null 2>&1; then
+  echo "$PASS overmind   $(overmind version 2>&1 | head -1)"
+else
+  echo "$WARN overmind   not found (only needed for 'mise run dev' on Mac/Linux)"
+  echo "      Install: brew install overmind  (Mac)"
+  echo "               go install github.com/DarthSim/overmind/v2@latest  (Linux)"
+  echo "      Windows users: see README for manual start instructions"
+fi
+
+# psql (optional — only needed for db:psql task)
+if psql --version >/dev/null 2>&1; then
+  echo "$PASS psql   $(psql --version)"
+else
+  echo "$WARN psql   not found (optional — needed only for mise run db:psql)"
+  echo "      Mac: brew install libpq && brew link --force libpq"
+  echo "      Linux: sudo apt install postgresql-client"
+fi
+
+echo ""
+if [ "$OK" = true ]; then
+  echo "All required tools found. Run:  mise run test"
+else
+  echo "Some tools are missing. Install them and re-run:  mise run setup"
+fi
+echo ""
+"""
+
+# ── Build ────────────────────────────────────────────────────────────────────
+
+[tasks.build]
+description = "Build the blue-green workshop binary"
+run = "go build -o bin/blue-green ./cmd/blue-green"
+
+# ── Tests (no Docker needed) ─────────────────────────────────────────────────
+
+[tasks.test]
+description = "Run all workshop tests — no external dependencies required"
+run = "go test -race -v -count=1 ./internal/bluegreen/..."
+
+[tasks."test:short"]
+description = "Run tests without verbose output (just pass/fail summary)"
+run = "go test -race -count=1 ./internal/bluegreen/..."
+
+# ── Full stack (Mac / Linux via overmind) ────────────────────────────────────
+
+[tasks.dev]
+description = "Start the full workshop stack: Temporal + Postgres + app (Mac/Linux)"
+run = "overmind start -f Procfile.blue-green"
+
+# ── Database only ────────────────────────────────────────────────────────────
+
+[tasks."db:up"]
+description = "Start Postgres 18 (port 5435) in background"
+run = "docker compose -f cmd/blue-green/01-db/compose.yml up -d"
+
+[tasks."db:down"]
+description = "Stop Postgres and remove its data volume"
+run = "docker compose -f cmd/blue-green/01-db/compose.yml down -v"
+
+[tasks."db:psql"]
+description = "Open a psql prompt connected to the workshop database"
+run = "psql postgresql://postgres:postgres@localhost:5435/appdb"
+
+[tasks."db:logs"]
+description = "Tail Postgres container logs"
+run = "docker compose -f cmd/blue-green/01-db/compose.yml logs -f postgres"
+
+# ── Cleanup ───────────────────────────────────────────────────────────────────
+
+[tasks.teardown]
+description = "Stop everything and clean up — leaves no trace"
+run = """
+echo "Stopping Postgres container..."
+docker compose -f cmd/blue-green/01-db/compose.yml down -v 2>/dev/null || true
+
+echo "Removing built binary..."
+rm -f bin/blue-green
+
+echo "Removing Temporal dev server database..."
+rm -rf .temporal
+
+echo "Done — system restored to pre-workshop state."
+"""

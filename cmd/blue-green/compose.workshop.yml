@@ -1,0 +1,78 @@
+# =============================================================================
+# Blue-Green Workshop — all-in-one Docker Compose
+#
+# Prerequisites: Docker Desktop (nothing else required)
+# Start:  docker compose -f cmd/blue-green/compose.workshop.yml up
+# Stop:   docker compose -f cmd/blue-green/compose.workshop.yml down -v
+# Tests:  docker compose -f cmd/blue-green/compose.workshop.yml run --rm test
+# =============================================================================
+
+services:
+
+  # ── PostgreSQL 18 ─────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB:       appdb
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - track_commit_timestamp=on
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ./01-db/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d appdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Temporal dev server ───────────────────────────────────────────────────
+  # Built from the temporal-dev stage in our Dockerfile (go install — no
+  # external registry required). The layer is cached after the first build.
+  temporal:
+    build:
+      context: ../..
+      dockerfile: cmd/blue-green/Dockerfile
+      target: temporal-dev
+    ports:
+      - "7233:7233"
+      - "8233:8233"
+    healthcheck:
+      test: ["CMD", "/root/.temporalio/bin/temporal", "operator", "cluster", "health", "--address", "localhost:7233"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # ── Workshop app ──────────────────────────────────────────────────────────
+  app:
+    build:
+      context: ../..
+      dockerfile: cmd/blue-green/Dockerfile
+      target: runtime
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      HTTP_ADDR:        :8083
+    ports:
+      - "8083:8083"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+
+  # ── Test runner (one-shot — not started by default) ───────────────────────
+  test:
+    build:
+      context: ../..
+      dockerfile: cmd/blue-green/Dockerfile
+      target: test
+    profiles:
+      - test
+
+volumes:
+  pgdata:

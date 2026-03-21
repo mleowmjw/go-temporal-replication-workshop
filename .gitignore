@@ -48,6 +48,7 @@ EXPERIMENTS
 
 # air hot-reload build artefacts (one dir per session)
 .air-session-*/
+.air-blue-green/
 
 # Ignore varlock; avoid use of .env if possible ..
 

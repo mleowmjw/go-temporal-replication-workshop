@@ -1,0 +1,10 @@
+# Blue-Green workshop process stack — run with: overmind start -f Procfile.blue-green
+#
+# Processes (all run from workspace root):
+#   temporal  — Temporal dev server (SQLite, metrics on :8077)
+#   postgres  — PostgreSQL 18 container (port 5435, CDC-ready, foreground via compose)
+#   app       — Blue-Green control plane with air hot-reload (HTTP on :8083)
+
+temporal: mkdir -p .temporal && temporal server start-dev --db-filename .temporal/temporal.db --metrics-port 8077
+postgres: docker compose -f cmd/blue-green/01-db/compose.yml up
+app: air -c cmd/blue-green/.air.toml

@@ -125,3 +125,107 @@ run = "docker compose -f cmd/session-3/03-platform/compose.yml down -v"
 [tasks."session-3:obs:logs"]
 description = "Tail session-3 observability container logs"
 run = "docker compose -f cmd/session-3/03-platform/compose.yml logs -f"
+
+# ---------------------------------------------------------------------------
+# Blue-Green: Database Blue-Green Deployment Workshop
+# ---------------------------------------------------------------------------
+
+[tasks."blue-green:workshop"]
+description = "Start the full workshop stack via Docker (no local tools needed)"
+run = "docker compose -f cmd/blue-green/compose.workshop.yml up"
+
+[tasks."blue-green:workshop:down"]
+description = "Stop and clean up the Docker workshop stack"
+run = "docker compose -f cmd/blue-green/compose.workshop.yml down -v"
+
+[tasks."blue-green:workshop:test"]
+description = "Run workshop tests inside Docker (no local Go needed)"
+run = "docker compose -f cmd/blue-green/compose.workshop.yml run --rm test"
+
+[tasks."blue-green:build"]
+description = "Build blue-green binary to bin/blue-green"
+run = "go build -o bin/blue-green ./cmd/blue-green"
+
+[tasks."blue-green:dev"]
+description = "Start full blue-green stack (Temporal + Postgres 18 + app) via overmind"
+run = "overmind start -f Procfile.blue-green"
+
+[tasks."blue-green"]
+description = "Run blue-green control plane directly (requires Temporal dev server running)"
+run = "mise run blue-green:build && bin/blue-green"
+
+[tasks."blue-green:test"]
+description = "Run blue-green unit and integration tests (no external deps)"
+run = "go test -race -v -count=1 ./internal/bluegreen/..."
+
+[tasks."blue-green:db:up"]
+description = "Start Postgres 18 container for blue-green (detached, port 5435)"
+run = "docker compose -f cmd/blue-green/01-db/compose.yml up -d"
+
+[tasks."blue-green:db:down"]
+description = "Stop and remove blue-green Postgres container + volumes"
+run = "docker compose -f cmd/blue-green/01-db/compose.yml down -v"
+
+[tasks."blue-green:db:psql"]
+description = "Open psql against blue-green Postgres (port 5435)"
+run = "psql postgresql://postgres:postgres@localhost:5435/appdb"
+
+[tasks."blue-green:db:logs"]
+description = "Tail blue-green Postgres container logs"
+run = "docker compose -f cmd/blue-green/01-db/compose.yml logs -f postgres"
+
+[tasks."blue-green:setup"]
+description = "Check all prerequisites for the blue-green workshop"
+run = """
+set -e
+# mise task scripts are not interactive shells, so extend PATH to cover all
+# common install locations: homebrew (Mac), go install, user-local, system.
+export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/go/bin"
+PASS="✅" FAIL="❌" WARN="⚠️ " OK=true
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Blue-Green Workshop — Prerequisites Check"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+if go version >/dev/null 2>&1; then
+  echo "$PASS Go   $(go version | awk '{print $3}')"
+else
+  echo "$FAIL Go   not found — run: mise install"; OK=false
+fi
+if docker info >/dev/null 2>&1; then
+  echo "$PASS Docker   running"
+else
+  echo "$FAIL Docker   not running — start Docker Desktop"; OK=false
+fi
+if temporal version >/dev/null 2>&1; then
+  echo "$PASS temporal   $(temporal version 2>&1 | head -1)"
+else
+  echo "$WARN temporal CLI not found"
+  echo "      Mac: brew install temporal"
+  echo "      Linux: curl -sSf https://temporal.download/cli.sh | sh"
+  echo "      Windows: winget install Temporal.TemporalCLI"; OK=false
+fi
+if overmind version >/dev/null 2>&1; then
+  echo "$PASS overmind   $(overmind version 2>&1 | head -1)"
+else
+  echo "$WARN overmind not found (Mac/Linux only — Windows: use 3 terminals)"
+  echo "      Mac: brew install overmind"
+  echo "      Linux: go install github.com/DarthSim/overmind/v2@latest"
+fi
+psql --version >/dev/null 2>&1 && echo "$PASS psql   $(psql --version)" || echo "$WARN psql not found (optional)"
+echo ""
+[ "$OK" = true ] && echo "All required tools found. Next: mise run blue-green:test" || echo "Fix missing tools above, then re-run: mise run blue-green:setup"
+echo ""
+"""
+
+[tasks."blue-green:teardown"]
+description = "Stop all blue-green processes and remove all created data"
+run = """
+echo "Stopping Postgres..."
+docker compose -f cmd/blue-green/01-db/compose.yml down -v 2>/dev/null || true
+echo "Removing binary..."
+rm -f bin/blue-green
+echo "Removing Temporal database..."
+rm -rf .temporal
+echo "Done — system restored."
+"""

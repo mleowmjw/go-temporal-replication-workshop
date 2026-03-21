@@ -1,0 +1,32 @@
+services:
+  postgres:
+    image: postgres:18
+    container_name: ws-bluegreen-postgres
+    ports:
+      - "5435:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: appdb
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+      # PG18: enables conflict-origin tracking in pg_stat_subscription_stats
+      - -c
+      - track_commit_timestamp=on
+    volumes:
+      - pgdata_bluegreen:/var/lib/postgresql
+      - ./init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d appdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata_bluegreen:
