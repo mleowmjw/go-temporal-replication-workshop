@@ -2,6 +2,8 @@ package temporal
 
 import (
 	"fmt"
+	"maps"
+	"strings"
 	"time"
 
 	"app/internal/connectors"
@@ -202,30 +204,28 @@ func compensateCDC(ctx workflow.Context, res CDCProvisionResult, spec domain.Pip
 func BuildConnectorConfig(spec domain.PipelineSpec, connectSecret map[string]string) domain.ConnectorConfig {
 	name := fmt.Sprintf("dbz-%s-%s", spec.TenantID, spec.PipelineID)
 	cfg := map[string]string{
-		"connector.class":               "io.debezium.connector.postgresql.PostgresConnector",
-		"topic.prefix":                  fmt.Sprintf("workshop.%s", spec.TenantID),
-		"plugin.name":                   "pgoutput",
-		"snapshot.mode":                 "initial",
-		"publication.autocreate.mode":   "disabled",
-		"include.schema.changes":        "false",
+		"connector.class":             "io.debezium.connector.postgresql.PostgresConnector",
+		"topic.prefix":                fmt.Sprintf("workshop.%s", spec.TenantID),
+		"plugin.name":                 "pgoutput",
+		"snapshot.mode":               "initial",
+		"publication.autocreate.mode": "disabled",
+		"include.schema.changes":      "false",
 	}
 	// Merge source connection details from the resolved secret.
-	for k, v := range connectSecret {
-		cfg[k] = v
-	}
+	maps.Copy(cfg, connectSecret)
 	// Source spec overrides.
 	if spec.Source.Database != "" {
 		cfg["database.dbname"] = spec.Source.Database
 	}
 	if len(spec.Source.Tables) > 0 {
-		tbl := ""
+		var tbl strings.Builder
 		for i, t := range spec.Source.Tables {
 			if i > 0 {
-				tbl += ","
+				tbl.WriteString(",")
 			}
-			tbl += t
+			tbl.WriteString(t)
 		}
-		cfg["table.include.list"] = tbl
+		cfg["table.include.list"] = tbl.String()
 	}
 	return domain.ConnectorConfig{Name: name, Config: cfg}
 }

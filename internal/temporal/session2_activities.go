@@ -14,7 +14,7 @@ import (
 
 // safeHeartbeat calls activity.RecordHeartbeat but recovers from panics that occur
 // when the activity is invoked directly (e.g. in unit tests outside a Temporal worker).
-func safeHeartbeat(ctx context.Context, details ...interface{}) {
+func safeHeartbeat(ctx context.Context, details ...any) {
 	defer func() { _ = recover() }()
 	activity.RecordHeartbeat(ctx, details...)
 }

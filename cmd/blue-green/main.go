@@ -14,6 +14,7 @@ import (
 	bg "app/internal/bluegreen"
 	apptemporal "app/internal/temporal"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
 )
@@ -27,13 +28,33 @@ func main() {
 }
 
 func run(log *slog.Logger) error {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	temporalAddr := envOr("TEMPORAL_ADDRESS", "localhost:7233")
 	listenAddr := envOr("HTTP_ADDR", ":8083")
 
-	// ── In-memory stores and fakes (swap for real DB/migrator in E2E) ────────
+	// ── Migrator: real Postgres by default, fake when BG_MODE=test ───────────
 	deployStore := bg.NewInMemoryDeploymentStore()
-	migrator := bg.NewFakeDatabaseMigrator()
 	app := bg.NewCustomerApp()
+
+	var migrator bg.DatabaseMigrator
+	if envOr("BG_MODE", "e2e") == "test" {
+		log.Info("using fake in-memory migrator (BG_MODE=test)")
+		migrator = bg.NewFakeDatabaseMigrator()
+	} else {
+		dbURL := envOr("DATABASE_URL", "postgres://postgres:postgres@localhost:5435/appdb")
+		pool, err := pgxpool.New(ctx, dbURL)
+		if err != nil {
+			return fmt.Errorf("connect to postgres (%s): %w", dbURL, err)
+		}
+		defer pool.Close()
+		if err := pool.Ping(ctx); err != nil {
+			return fmt.Errorf("ping postgres: %w", err)
+		}
+		log.Info("connected to postgres", "url", dbURL)
+		migrator = bg.NewPgDatabaseMigrator(pool)
+	}
 
 	// ── Temporal client ───────────────────────────────────────────────────────
 	tc, err := client.Dial(client.Options{
@@ -79,9 +100,6 @@ func run(log *slog.Logger) error {
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	go func() {
 		log.Info("HTTP server listening", "addr", listenAddr)

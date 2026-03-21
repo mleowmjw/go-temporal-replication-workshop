@@ -127,20 +127,8 @@ description = "Tail session-3 observability container logs"
 run = "docker compose -f cmd/session-3/03-platform/compose.yml logs -f"
 
 # ---------------------------------------------------------------------------
-# Blue-Green: Database Blue-Green Deployment Workshop
+# Blue-Green: Database Blue-Green Deployment Workshop (Dev)
 # ---------------------------------------------------------------------------
-
-[tasks."blue-green:workshop"]
-description = "Start the full workshop stack via Docker (no local tools needed)"
-run = "docker compose -f cmd/blue-green/compose.workshop.yml up"
-
-[tasks."blue-green:workshop:down"]
-description = "Stop and clean up the Docker workshop stack"
-run = "docker compose -f cmd/blue-green/compose.workshop.yml down -v"
-
-[tasks."blue-green:workshop:test"]
-description = "Run workshop tests inside Docker (no local Go needed)"
-run = "docker compose -f cmd/blue-green/compose.workshop.yml run --rm test"
 
 [tasks."blue-green:build"]
 description = "Build blue-green binary to bin/blue-green"
@@ -156,7 +144,7 @@ run = "mise run blue-green:build && bin/blue-green"
 
 [tasks."blue-green:test"]
 description = "Run blue-green unit and integration tests (no external deps)"
-run = "go test -race -v -count=1 ./internal/bluegreen/..."
+run = "gotest -race -v -count=1 ./internal/bluegreen/..."
 
 [tasks."blue-green:db:up"]
 description = "Start Postgres 18 container for blue-green (detached, port 5435)"
@@ -174,7 +162,23 @@ run = "psql postgresql://postgres:postgres@localhost:5435/appdb"
 description = "Tail blue-green Postgres container logs"
 run = "docker compose -f cmd/blue-green/01-db/compose.yml logs -f postgres"
 
-[tasks."blue-green:setup"]
+[tasks."blue-green:teardown"]
+description = "Stop all blue-green processes and remove all created data"
+run = """
+echo "Stopping Postgres..."
+docker compose -f cmd/blue-green/01-db/compose.yml down -v 2>/dev/null || true
+echo "Removing binary..."
+rm -f bin/blue-green
+echo "Removing Temporal database..."
+rm -rf .temporal
+echo "Done — system restored."
+"""
+
+# ---------------------------------------------------------------------------
+# Blue-Green: Database Blue-Green Deployment Workshop
+# ---------------------------------------------------------------------------
+
+[tasks."workshop:blue-green:setup"]
 description = "Check all prerequisites for the blue-green workshop"
 run = """
 set -e
@@ -218,14 +222,15 @@ echo ""
 echo ""
 """
 
-[tasks."blue-green:teardown"]
-description = "Stop all blue-green processes and remove all created data"
-run = """
-echo "Stopping Postgres..."
-docker compose -f cmd/blue-green/01-db/compose.yml down -v 2>/dev/null || true
-echo "Removing binary..."
-rm -f bin/blue-green
-echo "Removing Temporal database..."
-rm -rf .temporal
-echo "Done — system restored."
-"""
+[tasks."workshop:blue-green:up"]
+description = "Start the full workshop stack via Docker (no local tools needed)"
+run = "docker compose -f cmd/blue-green/compose.workshop.yml up"
+
+[tasks."workshop:blue-green:down"]
+description = "Stop and clean up the Docker workshop stack"
+run = "docker compose -f cmd/blue-green/compose.workshop.yml down -v"
+
+[tasks."workshop:blue-green:test"]
+description = "Run workshop tests inside Docker (no local Go needed)"
+run = "docker compose -f cmd/blue-green/compose.workshop.yml run --rm test"
+

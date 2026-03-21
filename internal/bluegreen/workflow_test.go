@@ -2,7 +2,6 @@ package bluegreen_test
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 )
 
@@ -344,8 +344,12 @@ func (s *bgWorkflowSuite) TestPreContractCompatCheckActivityError_TriggersCompen
 	// We mock both calls explicitly; call 2 simulates a worker crash / DB unavailable.
 	s.env.OnActivity(acts.RunAppCompatCheckActivity, mock.Anything, true).
 		Return(bluegreen.AppCompatCheckResult{BluePass: true, GreenPass: true, Summary: "blue=PASS, green=PASS"}, nil).Once()
+	// Use a non-retryable error so the activity fails on the first attempt only.
+	// A plain errors.New would be retried (MaximumAttempts:3), exhausting the
+	// .Once() mock on attempt 2 and causing a "called over 1 times" panic.
 	s.env.OnActivity(acts.RunAppCompatCheckActivity, mock.Anything, false).
-		Return(bluegreen.AppCompatCheckResult{}, errors.New("migrator connection lost")).Once()
+		Return(bluegreen.AppCompatCheckResult{},
+			temporal.NewNonRetryableApplicationError("migrator connection lost", "ConnectionError", nil)).Once()
 
 	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow, plan)
 
