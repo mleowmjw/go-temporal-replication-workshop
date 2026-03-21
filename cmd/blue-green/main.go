@@ -34,10 +34,10 @@ func run(log *slog.Logger) error {
 	temporalAddr := envOr("TEMPORAL_ADDRESS", "localhost:7233")
 	listenAddr := envOr("HTTP_ADDR", ":8083")
 
-	// ── Migrator: real Postgres by default, fake when BG_MODE=test ───────────
 	deployStore := bg.NewInMemoryDeploymentStore()
 	app := bg.NewCustomerApp()
 
+	// ── Migrator: real Postgres by default, fake when BG_MODE=test ───────────
 	var migrator bg.DatabaseMigrator
 	if envOr("BG_MODE", "e2e") == "test" {
 		log.Info("using fake in-memory migrator (BG_MODE=test)")

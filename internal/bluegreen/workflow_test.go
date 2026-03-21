@@ -2,17 +2,21 @@ package bluegreen_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"app/internal/bluegreen"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
+
+	"github.com/goforj/godump"
 )
 
 // bgWorkflowSuite groups all BlueGreenDeploymentWorkflow tests.
@@ -392,7 +396,12 @@ func (s *bgWorkflowSuite) TestPhaseHistoryIsComplete() {
 		phases[i] = h.Phase
 	}
 
+	godump.Dump(phases)
+	fmt.Println("<<<<<< spew BELOW >>>>>>>")
+	spew.Dump(phases)
+
 	// Verify key phases appear in the history.
+	// Below not correct; does not catch wrong orering .. <<TODO>>
 	assert.Contains(s.T(), phases, bluegreen.PhasePlanReview)
 	assert.Contains(s.T(), phases, bluegreen.PhaseExpanding)
 	assert.Contains(s.T(), phases, bluegreen.PhaseExpandVerify)
