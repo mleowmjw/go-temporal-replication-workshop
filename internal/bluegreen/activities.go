@@ -9,8 +9,8 @@ import (
 )
 
 // BGDependencies holds all external dependencies injected into activities.
+// Phase state is managed by the workflow itself; no store is needed here.
 type BGDependencies struct {
-	Store    DeploymentStore
 	Migrator DatabaseMigrator
 	App      AppSimulator
 }
@@ -51,13 +51,6 @@ func (a *BGActivities) ValidatePlanActivity(ctx context.Context, plan MigrationP
 	log := activity.GetLogger(ctx)
 	log.Info("validating migration plan", "id", plan.ID)
 	return ValidateMigrationPlan(plan)
-}
-
-// UpdatePhaseActivity persists a phase transition to the deployment store.
-func (a *BGActivities) UpdatePhaseActivity(ctx context.Context, id string, phase Phase, reason string) error {
-	log := activity.GetLogger(ctx)
-	log.Info("updating deployment phase", "id", id, "phase", phase, "reason", reason)
-	return a.deps.Store.UpdatePhase(ctx, id, phase, reason)
 }
 
 // ExecuteExpandActivity runs the expand SQL statements (adds new structure without removing old).
@@ -143,13 +136,13 @@ func (a *BGActivities) AcquireReadOnlyActivity(ctx context.Context, plan Migrati
 	return nil
 }
 
-// SwitchTrafficActivity records the traffic switch in the deployment store.
-// In production this would update a load balancer or feature flag.
+// SwitchTrafficActivity performs the traffic switch from blue to green.
+// In production this would update a load balancer, feature flag, or service mesh.
 func (a *BGActivities) SwitchTrafficActivity(ctx context.Context, deploymentID string) error {
 	log := activity.GetLogger(ctx)
 	log.Info("switching traffic to green environment", "id", deploymentID)
-	// Record in store as part of monitoring phase.
-	return a.deps.Store.UpdatePhase(ctx, deploymentID, PhaseMonitoring, "traffic switched to green")
+	// Production: update load balancer / feature flag here.
+	return nil
 }
 
 // ReleaseReadOnlyActivity removes the read-only restriction.

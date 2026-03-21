@@ -15,7 +15,6 @@ func RegisterBlueGreenWorker(w worker.Worker, acts *BGActivities) {
 	w.RegisterWorkflow(BlueGreenDeploymentWorkflow)
 
 	w.RegisterActivity(acts.ValidatePlanActivity)
-	w.RegisterActivity(acts.UpdatePhaseActivity)
 	w.RegisterActivity(acts.ExecuteExpandActivity)
 	w.RegisterActivity(acts.VerifyExpandActivity)
 	w.RegisterActivity(acts.RunAppCompatCheckActivity)

@@ -1,7 +1,6 @@
 package bluegreen_test
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -12,11 +11,10 @@ import (
 	"go.temporal.io/sdk/testsuite"
 )
 
-// buildDeps wires up in-memory fake dependencies.
+// buildDeps wires up in-memory fake dependencies (no store needed).
 func buildDeps(t *testing.T) bluegreen.BGDependencies {
 	t.Helper()
 	return bluegreen.BGDependencies{
-		Store:    bluegreen.NewInMemoryDeploymentStore(),
 		Migrator: bluegreen.NewFakeDatabaseMigrator(),
 		App:      bluegreen.NewCustomerApp(),
 	}
@@ -49,23 +47,6 @@ func TestValidatePlanActivity_Invalid(t *testing.T) {
 	bad.ID = ""
 	_, err := env.ExecuteActivity(acts.ValidatePlanActivity, bad)
 	require.Error(t, err)
-}
-
-func TestUpdatePhaseActivity(t *testing.T) {
-	env := activityEnv(t)
-	deps := buildDeps(t)
-	acts := bluegreen.NewBGActivities(deps)
-	env.RegisterActivity(acts.UpdatePhaseActivity)
-	ctx := context.Background()
-
-	require.NoError(t, deps.Store.Create(ctx, bluegreen.Deployment{ID: "d1", Plan: validPlan()}))
-
-	_, err := env.ExecuteActivity(acts.UpdatePhaseActivity, "d1", bluegreen.PhasePlanReview, "started")
-	require.NoError(t, err)
-
-	got, err := deps.Store.Get(ctx, "d1")
-	require.NoError(t, err)
-	assert.Equal(t, bluegreen.PhasePlanReview, got.Phase)
 }
 
 func TestExecuteExpandActivity(t *testing.T) {
@@ -157,8 +138,6 @@ func TestRunAppCompatCheckActivity_BlueRequired_BreaksOnExpand(t *testing.T) {
 	deps := buildDeps(t)
 	fake := deps.Migrator.(*bluegreen.FakeDatabaseMigrator)
 	fake.ExecuteSQLFn = func(stmts []string) error {
-		// Simulate an expand that runs without error but corrupts nothing;
-		// the QueryCheckFn override below handles the column-missing behaviour.
 		_ = stmts
 		return nil
 	}
@@ -199,16 +178,10 @@ func TestSwitchTrafficActivity(t *testing.T) {
 	deps := buildDeps(t)
 	acts := bluegreen.NewBGActivities(deps)
 	env.RegisterActivity(acts.SwitchTrafficActivity)
-	ctx := context.Background()
 
-	require.NoError(t, deps.Store.Create(ctx, bluegreen.Deployment{ID: "d1", Plan: validPlan()}))
-
+	// SwitchTrafficActivity is now a pure side-effect placeholder; just verify it succeeds.
 	_, err := env.ExecuteActivity(acts.SwitchTrafficActivity, "d1")
 	require.NoError(t, err)
-
-	got, err := deps.Store.Get(ctx, "d1")
-	require.NoError(t, err)
-	assert.Equal(t, bluegreen.PhaseMonitoring, got.Phase)
 }
 
 func TestExecuteContractActivity(t *testing.T) {
@@ -240,7 +213,7 @@ func TestExecuteRollbackActivity(t *testing.T) {
 	assert.False(t, fake.HasColumn("phone"), "rollback must drop phone")
 }
 
-// contains is a helper to check substring in lowercase.
+// contains is a helper to check substring presence.
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || len(s) > 0 && stringContains(s, sub))
 }

@@ -39,6 +39,10 @@ var ddlActivityOptions = workflow.ActivityOptions{
 //	expand_verify → (approve) → cutover → monitoring
 //	monitoring   → (approve) → contract_wait → (approve_contract) → contracting → complete
 //	any_phase    → (rollback) → rolling back → rolled_back
+//
+// State is exposed via the QueryDeploymentState query handler so callers can
+// read the current phase and full history directly from Temporal without an
+// external store.
 func BlueGreenDeploymentWorkflow(ctx workflow.Context, plan MigrationPlan) (DeploymentResult, error) {
 	ctx = workflow.WithActivityOptions(ctx, defaultBGActivityOptions)
 	log := workflow.GetLogger(ctx)
@@ -51,8 +55,35 @@ func BlueGreenDeploymentWorkflow(ctx workflow.Context, plan MigrationPlan) (Depl
 	// the real *BGActivities instance. This is the standard Temporal Go SDK
 	// pattern (identical to `var acts *Activities` in internal/temporal/workflow.go).
 	var acts *BGActivities
-	var result DeploymentResult
-	result.DeploymentID = plan.ID
+
+	// phase and history are the single source of truth for deployment state.
+	// They live in workflow memory and are exposed via the query handler below.
+	phase := PhasePending
+	var history []PhaseTransition
+
+	// setPhase records a phase transition using deterministic workflow time.
+	setPhase := func(p Phase, reason string) {
+		phase = p
+		history = append(history, PhaseTransition{
+			Phase:  p,
+			At:     workflow.Now(ctx),
+			Reason: reason,
+		})
+		log.Info("phase transition", "id", plan.ID, "phase", p, "reason", reason)
+	}
+
+	// Register query handler immediately so the workflow is queryable from the
+	// moment it starts (even before the first blocking call).
+	if err := workflow.SetQueryHandler(ctx, QueryDeploymentState, func() (DeploymentStatus, error) {
+		return DeploymentStatus{
+			ID:      plan.ID,
+			Phase:   phase,
+			Plan:    plan,
+			History: history,
+		}, nil
+	}); err != nil {
+		return DeploymentResult{}, fmt.Errorf("register query handler: %w", err)
+	}
 
 	// Channels for human approval and rollback signals.
 	approveCh := workflow.GetSignalChannel(ctx, SignalApprove)
@@ -64,19 +95,19 @@ func BlueGreenDeploymentWorkflow(ctx workflow.Context, plan MigrationPlan) (Depl
 
 	// waitForApproval blocks until the human sends "approve" or "rollback".
 	// Returns true if approved, false if rollback was requested.
-	waitForApproval := func(phase Phase) bool {
+	waitForApproval := func(atPhase Phase) bool {
 		sel := workflow.NewSelector(ctx)
 		approved := false
 		sel.AddReceive(approveCh, func(c workflow.ReceiveChannel, more bool) {
 			var payload ApprovalPayload
 			c.Receive(ctx, &payload)
-			log.Info("approval received", "phase", phase, "note", payload.Note)
+			log.Info("approval received", "phase", atPhase, "note", payload.Note)
 			approved = true
 		})
 		sel.AddReceive(rollbackCh, func(c workflow.ReceiveChannel, more bool) {
 			var payload RollbackPayload
 			c.Receive(ctx, &payload)
-			log.Warn("rollback signal received", "phase", phase, "reason", payload.Reason)
+			log.Warn("rollback signal received", "phase", atPhase, "reason", payload.Reason)
 			rollbackRequested = true
 		})
 		sel.Select(ctx)
@@ -84,29 +115,33 @@ func BlueGreenDeploymentWorkflow(ctx workflow.Context, plan MigrationPlan) (Depl
 	}
 
 	// compensate rolls back the expand and releases any locks.
+	// Rollback is a valid terminal state (not a failure): the workflow completed
+	// its compensation successfully. Callers inspect result.Phase to distinguish
+	// PhaseComplete from PhaseRolledBack.
 	compensate := func(reason string) (DeploymentResult, error) {
 		log.Warn("compensating blue-green deployment", "id", plan.ID, "reason", reason)
 		compCtx := workflow.WithActivityOptions(ctx, ddlActivityOptions)
 
-		// Release read-only lock if held (idempotent on fake).
+		// Release read-only lock if held (idempotent).
 		_ = workflow.ExecuteActivity(compCtx, acts.ReleaseReadOnlyActivity, plan).Get(compCtx, nil)
 		// Undo expand SQL.
 		_ = workflow.ExecuteActivity(compCtx, acts.ExecuteRollbackActivity, plan).Get(compCtx, nil)
-		// Mark rolled back.
-		_ = workflow.ExecuteActivity(ctx, acts.UpdatePhaseActivity, plan.ID, PhaseRolledBack, reason).Get(ctx, nil)
 
-		result.Phase = PhaseRolledBack
-		return result, fmt.Errorf("deployment rolled back: %s", reason)
+		setPhase(PhaseRolledBack, reason)
+		return DeploymentResult{
+			DeploymentID: plan.ID,
+			Phase:        PhaseRolledBack,
+			History:      history,
+		}, nil
 	}
 
 	// ─── Phase: plan_review ──────────────────────────────────────────────────
-	if err := workflow.ExecuteActivity(ctx, acts.UpdatePhaseActivity,
-		plan.ID, PhasePlanReview, "deployment created").Get(ctx, nil); err != nil {
-		return result, err
-	}
+	setPhase(PhasePlanReview, "deployment created")
+
 	if err := workflow.ExecuteActivity(ctx, acts.ValidatePlanActivity, plan).Get(ctx, nil); err != nil {
-		_ = workflow.ExecuteActivity(ctx, acts.UpdatePhaseActivity, plan.ID, PhaseFailed, err.Error()).Get(ctx, nil)
-		return result, fmt.Errorf("plan validation: %w", err)
+		setPhase(PhaseFailed, err.Error())
+		return DeploymentResult{DeploymentID: plan.ID, Phase: PhaseFailed, History: history},
+			fmt.Errorf("plan validation: %w", err)
 	}
 	log.Info("waiting for plan review approval", "id", plan.ID)
 	if !waitForApproval(PhasePlanReview) {
@@ -114,20 +149,15 @@ func BlueGreenDeploymentWorkflow(ctx workflow.Context, plan MigrationPlan) (Depl
 	}
 
 	// ─── Phase: expanding ────────────────────────────────────────────────────
-	if err := workflow.ExecuteActivity(ctx, acts.UpdatePhaseActivity,
-		plan.ID, PhaseExpanding, "plan approved").Get(ctx, nil); err != nil {
-		return result, err
-	}
+	setPhase(PhaseExpanding, "plan approved")
+
 	expandCtx := workflow.WithActivityOptions(ctx, ddlActivityOptions)
 	if err := workflow.ExecuteActivity(expandCtx, acts.ExecuteExpandActivity, plan).Get(expandCtx, nil); err != nil {
 		return compensate(fmt.Sprintf("expand failed: %v", err))
 	}
 
 	// ─── Phase: expand_verify ────────────────────────────────────────────────
-	if err := workflow.ExecuteActivity(ctx, acts.UpdatePhaseActivity,
-		plan.ID, PhaseExpandVerify, "expand SQL completed").Get(ctx, nil); err != nil {
-		return result, err
-	}
+	setPhase(PhaseExpandVerify, "expand SQL completed")
 
 	// Verify data consistency.
 	var verifyResult VerifyExpandResult
@@ -149,10 +179,8 @@ func BlueGreenDeploymentWorkflow(ctx workflow.Context, plan MigrationPlan) (Depl
 	}
 
 	// ─── Phase: cutover (read-only window) ───────────────────────────────────
-	if err := workflow.ExecuteActivity(ctx, acts.UpdatePhaseActivity,
-		plan.ID, PhaseCutover, "expand approved — acquiring read-only lock").Get(ctx, nil); err != nil {
-		return result, err
-	}
+	setPhase(PhaseCutover, "expand approved — acquiring read-only lock")
+
 	if err := workflow.ExecuteActivity(ctx, acts.AcquireReadOnlyActivity, plan).Get(ctx, nil); err != nil {
 		return compensate(fmt.Sprintf("acquire read-only failed: %v", err))
 	}
@@ -189,7 +217,7 @@ func BlueGreenDeploymentWorkflow(ctx workflow.Context, plan MigrationPlan) (Depl
 	}
 
 	// ─── Phase: monitoring ───────────────────────────────────────────────────
-	// SwitchTrafficActivity already writes PhaseMonitoring to the store.
+	setPhase(PhaseMonitoring, "traffic switched to green")
 	log.Info("green environment live — awaiting monitoring approval", "id", plan.ID)
 
 	// Race: approve → contract_wait, rollback → undo.
@@ -198,10 +226,7 @@ func BlueGreenDeploymentWorkflow(ctx workflow.Context, plan MigrationPlan) (Depl
 	}
 
 	// ─── Phase: contract_wait ────────────────────────────────────────────────
-	if err := workflow.ExecuteActivity(ctx, acts.UpdatePhaseActivity,
-		plan.ID, PhaseContractWait, "monitoring approved — ready for contract").Get(ctx, nil); err != nil {
-		return result, err
-	}
+	setPhase(PhaseContractWait, "monitoring approved — ready for contract")
 
 	// Final app compat check: green must pass before we drop old columns.
 	// If the activity itself errors (worker unavailable, panic, etc.) we
@@ -223,16 +248,14 @@ func BlueGreenDeploymentWorkflow(ctx workflow.Context, plan MigrationPlan) (Depl
 	}
 
 	// ─── Phase: contracting ───────────────────────────────────────────────────
-	if err := workflow.ExecuteActivity(ctx, acts.UpdatePhaseActivity,
-		plan.ID, PhaseContracting, "contract approved").Get(ctx, nil); err != nil {
-		return result, err
-	}
+	setPhase(PhaseContracting, "contract approved")
+
 	contractCtx := workflow.WithActivityOptions(ctx, ddlActivityOptions)
 	if err := workflow.ExecuteActivity(contractCtx, acts.ExecuteContractActivity, plan).Get(contractCtx, nil); err != nil {
 		// Contract failure is NOT rolled back (DDL may be partially applied).
-		_ = workflow.ExecuteActivity(ctx, acts.UpdatePhaseActivity, plan.ID, PhaseFailed,
-			fmt.Sprintf("contract SQL failed: %v", err)).Get(ctx, nil)
-		return result, fmt.Errorf("contract SQL: %w", err)
+		setPhase(PhaseFailed, fmt.Sprintf("contract SQL failed: %v", err))
+		return DeploymentResult{DeploymentID: plan.ID, Phase: PhaseFailed, History: history},
+			fmt.Errorf("contract SQL: %w", err)
 	}
 
 	// Final verification.
@@ -244,16 +267,11 @@ func BlueGreenDeploymentWorkflow(ctx workflow.Context, plan MigrationPlan) (Depl
 	log.Info("contract complete", "compat", finalCompat.Summary)
 
 	// ─── Phase: complete ──────────────────────────────────────────────────────
-	if err := workflow.ExecuteActivity(ctx, acts.UpdatePhaseActivity,
-		plan.ID, PhaseComplete, "deployment complete").Get(ctx, nil); err != nil {
-		return result, err
-	}
-
-	result.Phase = PhaseComplete
+	setPhase(PhaseComplete, "deployment complete")
 	log.Info("blue-green deployment complete", "id", plan.ID)
-	return result, nil
+	return DeploymentResult{
+		DeploymentID: plan.ID,
+		Phase:        PhaseComplete,
+		History:      history,
+	}, nil
 }
-
-// ensureTimer is a no-op helper referenced to avoid unused-import warnings when
-// timer cancellation races are used.
-var _ = time.Second

@@ -16,16 +16,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeWorkflowStarter is an in-memory stub for tests.
-type fakeWorkflowStarter struct {
+// fakeWorkflowClient is an in-memory stub that implements bluegreen.WorkflowClient.
+type fakeWorkflowClient struct {
 	started   []bluegreen.MigrationPlan
 	approvals []string
 	rollbacks []string
 	startErr  error
 	signalErr error
+	statusFn  func(id string) (bluegreen.DeploymentStatus, error)
 }
 
-func (f *fakeWorkflowStarter) StartDeployment(_ context.Context, plan bluegreen.MigrationPlan) (string, error) {
+func (f *fakeWorkflowClient) StartDeployment(_ context.Context, plan bluegreen.MigrationPlan) (string, error) {
 	if f.startErr != nil {
 		return "", f.startErr
 	}
@@ -33,7 +34,7 @@ func (f *fakeWorkflowStarter) StartDeployment(_ context.Context, plan bluegreen.
 	return "wf-" + plan.ID, nil
 }
 
-func (f *fakeWorkflowStarter) ApproveDeployment(_ context.Context, id string, _ bluegreen.ApprovalPayload) error {
+func (f *fakeWorkflowClient) ApproveDeployment(_ context.Context, id string, _ bluegreen.ApprovalPayload) error {
 	if f.signalErr != nil {
 		return f.signalErr
 	}
@@ -41,7 +42,7 @@ func (f *fakeWorkflowStarter) ApproveDeployment(_ context.Context, id string, _ 
 	return nil
 }
 
-func (f *fakeWorkflowStarter) RollbackDeployment(_ context.Context, id string, _ bluegreen.RollbackPayload) error {
+func (f *fakeWorkflowClient) RollbackDeployment(_ context.Context, id string, _ bluegreen.RollbackPayload) error {
 	if f.signalErr != nil {
 		return f.signalErr
 	}
@@ -49,12 +50,18 @@ func (f *fakeWorkflowStarter) RollbackDeployment(_ context.Context, id string, _
 	return nil
 }
 
-func newTestHandler(t *testing.T) (*bluegreen.Handler, *bluegreen.InMemoryDeploymentStore, *fakeWorkflowStarter) {
+func (f *fakeWorkflowClient) GetDeploymentStatus(_ context.Context, id string) (bluegreen.DeploymentStatus, error) {
+	if f.statusFn != nil {
+		return f.statusFn(id)
+	}
+	return bluegreen.DeploymentStatus{}, bluegreen.ErrDeploymentNotFound
+}
+
+func newTestHandler(t *testing.T) (*bluegreen.Handler, *fakeWorkflowClient) {
 	t.Helper()
-	store := bluegreen.NewInMemoryDeploymentStore()
-	wf := &fakeWorkflowStarter{}
-	h := bluegreen.NewHandler(store, wf, slog.Default())
-	return h, store, wf
+	wf := &fakeWorkflowClient{}
+	h := bluegreen.NewHandler(wf, slog.Default())
+	return h, wf
 }
 
 func newMux(h *bluegreen.Handler) *http.ServeMux {
@@ -64,7 +71,7 @@ func newMux(h *bluegreen.Handler) *http.ServeMux {
 }
 
 func TestCreateDeployment_Success(t *testing.T) {
-	h, store, wf := newTestHandler(t)
+	h, wf := newTestHandler(t)
 	mux := newMux(h)
 
 	body, _ := json.Marshal(validPlan())
@@ -78,16 +85,11 @@ func TestCreateDeployment_Success(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
 	assert.Equal(t, validPlan().ID, resp["deployment_id"])
 	assert.Equal(t, "wf-"+validPlan().ID, resp["workflow_id"])
-
-	// Deployment must be persisted.
-	d, err := store.Get(context.Background(), validPlan().ID)
-	require.NoError(t, err)
-	assert.Equal(t, validPlan().ID, d.ID)
 	assert.Len(t, wf.started, 1)
 }
 
 func TestCreateDeployment_InvalidJSON(t *testing.T) {
-	h, _, _ := newTestHandler(t)
+	h, _ := newTestHandler(t)
 	mux := newMux(h)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/deployments", bytes.NewBufferString("not-json"))
@@ -98,7 +100,7 @@ func TestCreateDeployment_InvalidJSON(t *testing.T) {
 }
 
 func TestCreateDeployment_InvalidPlan(t *testing.T) {
-	h, _, _ := newTestHandler(t)
+	h, _ := newTestHandler(t)
 	mux := newMux(h)
 
 	bad := validPlan()
@@ -112,11 +114,11 @@ func TestCreateDeployment_InvalidPlan(t *testing.T) {
 }
 
 func TestCreateDeployment_Duplicate(t *testing.T) {
-	h, store, _ := newTestHandler(t)
+	h, wf := newTestHandler(t)
 	mux := newMux(h)
 
-	// Pre-create deployment.
-	require.NoError(t, store.Create(context.Background(), bluegreen.Deployment{ID: validPlan().ID, Plan: validPlan()}))
+	// Simulate Temporal returning ErrDeploymentAlreadyExists on second start.
+	wf.startErr = bluegreen.ErrDeploymentAlreadyExists
 
 	body, _ := json.Marshal(validPlan())
 	req := httptest.NewRequest(http.MethodPost, "/v1/deployments", bytes.NewReader(body))
@@ -127,7 +129,7 @@ func TestCreateDeployment_Duplicate(t *testing.T) {
 }
 
 func TestCreateDeployment_WorkflowStartError(t *testing.T) {
-	h, _, wf := newTestHandler(t)
+	h, wf := newTestHandler(t)
 	mux := newMux(h)
 	wf.startErr = errors.New("temporal unavailable")
 
@@ -140,23 +142,30 @@ func TestCreateDeployment_WorkflowStartError(t *testing.T) {
 }
 
 func TestGetDeployment_Success(t *testing.T) {
-	h, store, _ := newTestHandler(t)
+	h, wf := newTestHandler(t)
 	mux := newMux(h)
 
-	require.NoError(t, store.Create(context.Background(), bluegreen.Deployment{ID: "d1", Plan: validPlan()}))
+	wf.statusFn = func(id string) (bluegreen.DeploymentStatus, error) {
+		return bluegreen.DeploymentStatus{
+			ID:    id,
+			Phase: bluegreen.PhaseExpandVerify,
+			Plan:  validPlan(),
+		}, nil
+	}
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/deployments/d1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/deployments/"+validPlan().ID, nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	var d bluegreen.Deployment
-	require.NoError(t, json.NewDecoder(rec.Body).Decode(&d))
-	assert.Equal(t, "d1", d.ID)
+	var status bluegreen.DeploymentStatus
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&status))
+	assert.Equal(t, validPlan().ID, status.ID)
+	assert.Equal(t, bluegreen.PhaseExpandVerify, status.Phase)
 }
 
 func TestGetDeployment_NotFound(t *testing.T) {
-	h, _, _ := newTestHandler(t)
+	h, _ := newTestHandler(t)
 	mux := newMux(h)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/deployments/missing", nil)
@@ -167,7 +176,7 @@ func TestGetDeployment_NotFound(t *testing.T) {
 }
 
 func TestApproveDeployment(t *testing.T) {
-	h, _, wf := newTestHandler(t)
+	h, wf := newTestHandler(t)
 	mux := newMux(h)
 
 	body, _ := json.Marshal(bluegreen.ApprovalPayload{Note: "LGTM"})
@@ -180,7 +189,7 @@ func TestApproveDeployment(t *testing.T) {
 }
 
 func TestApproveDeployment_SignalError(t *testing.T) {
-	h, _, wf := newTestHandler(t)
+	h, wf := newTestHandler(t)
 	mux := newMux(h)
 	wf.signalErr = errors.New("workflow not found")
 
@@ -192,7 +201,7 @@ func TestApproveDeployment_SignalError(t *testing.T) {
 }
 
 func TestRollbackDeployment(t *testing.T) {
-	h, _, wf := newTestHandler(t)
+	h, wf := newTestHandler(t)
 	mux := newMux(h)
 
 	body, _ := json.Marshal(bluegreen.RollbackPayload{Reason: "looks bad"})
@@ -205,7 +214,7 @@ func TestRollbackDeployment(t *testing.T) {
 }
 
 func TestHealthz(t *testing.T) {
-	h, _, _ := newTestHandler(t)
+	h, _ := newTestHandler(t)
 	mux := newMux(h)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)

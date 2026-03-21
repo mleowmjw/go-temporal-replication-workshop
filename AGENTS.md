@@ -126,3 +126,171 @@ internal/api/                   HTTP handlers + Authorizer + routing
 - `session-N:db:down`  — `docker compose … down -v`
 - `session-N:db:psql`  — psql shortcut
 - `session-N:db:logs`  — tail container logs
+
+---
+
+## Idiomatic Temporal — Learnings (blue-green refactor)
+
+These rules are derived from a concrete mistake: an initial implementation that
+duplicated workflow state in an external `InMemoryDeploymentStore` and used an
+`UpdatePhaseActivity` to sync every phase transition to it. That pattern is
+**anti-idiomatic** and was fully removed. Do not repeat it.
+
+### 1. Temporal IS the store — never shadow workflow state externally
+
+Temporal's event history is the durable, replayable source of truth for all
+workflow state. Building a parallel store (in-memory map, database table, Redis
+key, etc.) that mirrors what phase the workflow is in is redundant and creates
+two sources of truth that can diverge.
+
+**Wrong pattern (do not do this):**
+```go
+// Anti-pattern: activity whose only job is to update a shadow store
+func (a *Activities) UpdatePhaseActivity(ctx context.Context, id string, phase Phase, ...) error {
+    return a.deps.Store.UpdatePhase(ctx, id, phase, ...)  // just mirrors workflow code-path
+}
+// Called ~8 times per workflow, adding ~16 history events of pure overhead
+```
+
+**Right pattern:**
+```go
+// Workflow-local state — lives in Temporal history, zero external writes
+phase := PhasePending
+var history []PhaseTransition
+
+setPhase := func(p Phase, reason string) {
+    phase = p
+    history = append(history, PhaseTransition{Phase: p, At: workflow.Now(ctx), Reason: reason})
+}
+```
+
+### 2. Use `workflow.SetQueryHandler` to expose live state
+
+Queries are the idiomatic Temporal mechanism for reading workflow state from
+outside (HTTP handlers, CLI, dashboards) without polling or writing to an
+external store.
+
+- Register the query handler **before any blocking call** so the workflow is
+  queryable from the instant it starts.
+- The handler is a plain closure capturing workflow-local variables — it reads
+  state without mutating it.
+- Works on **running** workflows (returns live state) and **completed** workflows
+  (Temporal replays history to reconstruct the last state).
+
+```go
+const QueryDeploymentState = "deployment_state"
+
+// Register once at the top of the workflow function:
+_ = workflow.SetQueryHandler(ctx, QueryDeploymentState, func() (DeploymentStatus, error) {
+    return DeploymentStatus{ID: plan.ID, Phase: phase, Plan: plan, History: history}, nil
+})
+```
+
+From the HTTP handler or test, query via the Temporal client:
+```go
+resp, err := client.QueryWorkflow(ctx, workflowID, "", QueryDeploymentState)
+var status DeploymentStatus
+resp.Get(&status)
+```
+
+In tests, use `env.QueryWorkflow` inside a `RegisterDelayedCallback` to assert
+mid-workflow state (while the workflow is blocked on a signal/selector):
+```go
+s.env.RegisterDelayedCallback(func() {
+    val, _ := s.env.QueryWorkflow(QueryDeploymentState)
+    var status DeploymentStatus
+    val.Get(&status)
+    assert.Equal(t, PhaseExpandVerify, status.Phase)
+}, 500*time.Millisecond)
+```
+
+### 3. Activities should only do real work — never update a shadow state
+
+An activity that exists solely to update an external store is a smell. Activities
+should interact with the real world (database DDL, load-balancer API, feature
+flag service). Phase tracking belongs in the workflow via `setPhase()`.
+
+**Consequence for `SwitchTrafficActivity`:** previously it called
+`Store.UpdatePhase(ctx, id, PhaseMonitoring, ...)` as a side-effect. After the
+refactor it is a pure side-effect placeholder (load balancer / feature flag call).
+The phase transition to `PhaseMonitoring` is done directly in the workflow with
+`setPhase(PhaseMonitoring, "traffic switched to green")`.
+
+### 4. Use `workflow.Now(ctx)` for timestamps inside the workflow
+
+`time.Now()` inside a workflow (or inside an activity called to set state) is
+non-deterministic across replays. Use `workflow.Now(ctx)` when you need a
+timestamp that must be consistent across Temporal history replays.
+
+```go
+// Correct — deterministic:
+history = append(history, PhaseTransition{Phase: p, At: workflow.Now(ctx), ...})
+
+// Wrong — breaks deterministic replay if used inside workflow code:
+history = append(history, PhaseTransition{Phase: p, At: time.Now(), ...})
+```
+
+### 5. Rollback / compensation is a successful outcome, not an error
+
+When a workflow compensates (rolls back the expand, releases locks), it has
+**successfully completed its job**. Returning a Go `error` from the workflow
+function in this case:
+- Shows the workflow execution as `FAILED` in the Temporal UI (misleading)
+- Makes `env.GetWorkflowResult(&result)` impossible in tests (SDK returns the
+  error, not the result value)
+
+Return `(result, nil)` with `result.Phase = PhaseRolledBack`. Reserve non-nil
+errors for genuinely unexpected failures (plan validation, contract SQL failure
+that cannot be compensated).
+
+```go
+compensate := func(reason string) (DeploymentResult, error) {
+    // ... release lock, run rollback SQL ...
+    setPhase(PhaseRolledBack, reason)
+    return DeploymentResult{DeploymentID: plan.ID, Phase: PhaseRolledBack, History: history}, nil
+    // NOT: return result, fmt.Errorf("rolled back: %s", reason)
+}
+```
+
+### 6. Workflow result should carry full state for callers
+
+Return the complete `DeploymentResult` (including `History`) from the workflow
+function. This lets callers who `Get()` on the workflow run inspect the full
+lifecycle without needing a separate query.
+
+```go
+return DeploymentResult{
+    DeploymentID: plan.ID,
+    Phase:        PhaseComplete,
+    History:      history,  // full ordered phase log
+}, nil
+```
+
+### 7. Test workflow state via result or mid-flight QueryWorkflow — not external stores
+
+With the query handler approach, tests become simpler:
+
+- **Happy path / terminal state**: use `env.GetWorkflowResult(&result)` and
+  assert on `result.Phase` and `result.History`.
+- **Mid-flight state**: use `env.RegisterDelayedCallback` + `env.QueryWorkflow`
+  to assert state while the workflow is blocked on a signal.
+- **Never** create a store, seed it, and call `store.Get()` to verify workflow
+  progress — that is the anti-pattern we removed.
+
+### 8. Duplicate workflow ID detection belongs in the client adapter
+
+`temporal.IsWorkflowExecutionAlreadyStartedError(err)` (from
+`go.temporal.io/sdk/temporal`) detects when `ExecuteWorkflow` is called with an
+already-running workflow ID. Map this to a domain sentinel error (`ErrDeploymentAlreadyExists`)
+at the adapter layer so the rest of the codebase does not depend on Temporal
+error types:
+
+```go
+run, err := s.client.ExecuteWorkflow(ctx, opts, BlueGreenDeploymentWorkflow, plan)
+if temporal.IsWorkflowExecutionAlreadyStartedError(err) {
+    return "", ErrDeploymentAlreadyExists
+}
+```
+
+The HTTP handler then maps `ErrDeploymentAlreadyExists` → `409 Conflict` without
+importing any Temporal packages.

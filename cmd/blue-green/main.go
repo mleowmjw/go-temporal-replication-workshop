@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -16,7 +17,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.temporal.io/sdk/client"
-	"go.temporal.io/sdk/worker"
+	"go.temporal.io/sdk/temporal"
+	sdkworker "go.temporal.io/sdk/worker"
 )
 
 func main() {
@@ -34,7 +36,6 @@ func run(log *slog.Logger) error {
 	temporalAddr := envOr("TEMPORAL_ADDRESS", "localhost:7233")
 	listenAddr := envOr("HTTP_ADDR", ":8083")
 
-	deployStore := bg.NewInMemoryDeploymentStore()
 	app := bg.NewCustomerApp()
 
 	// ── Migrator: real Postgres by default, fake when BG_MODE=test ───────────
@@ -68,13 +69,12 @@ func run(log *slog.Logger) error {
 
 	// ── Temporal worker ───────────────────────────────────────────────────────
 	deps := bg.BGDependencies{
-		Store:    deployStore,
 		Migrator: migrator,
 		App:      app,
 	}
 	acts := bg.NewBGActivities(deps)
 
-	w := worker.New(tc, bg.TaskQueue, worker.Options{
+	w := sdkworker.New(tc, bg.TaskQueue, sdkworker.Options{
 		BuildID:                 bg.WorkerBuildID,
 		UseBuildIDForVersioning: true,
 	})
@@ -88,8 +88,8 @@ func run(log *slog.Logger) error {
 	log.Info("temporal worker started", "task_queue", bg.TaskQueue, "build_id", bg.WorkerBuildID)
 
 	// ── HTTP server ───────────────────────────────────────────────────────────
-	wfStarter := &temporalWorkflowStarter{client: tc}
-	h := bg.NewHandler(deployStore, wfStarter, log)
+	wfClient := &temporalWorkflowClient{client: tc}
+	h := bg.NewHandler(wfClient, log)
 
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -116,29 +116,58 @@ func run(log *slog.Logger) error {
 	return srv.Shutdown(shutCtx)
 }
 
-// temporalWorkflowStarter implements bg.WorkflowStarter using the real Temporal client.
-type temporalWorkflowStarter struct {
+// temporalWorkflowClient implements bg.WorkflowClient using the real Temporal client.
+type temporalWorkflowClient struct {
 	client client.Client
 }
 
-func (s *temporalWorkflowStarter) StartDeployment(ctx context.Context, plan bg.MigrationPlan) (string, error) {
+func (s *temporalWorkflowClient) StartDeployment(ctx context.Context, plan bg.MigrationPlan) (string, error) {
 	opts := client.StartWorkflowOptions{
 		ID:        "bg-deploy-" + plan.ID,
 		TaskQueue: bg.TaskQueue,
 	}
 	run, err := s.client.ExecuteWorkflow(ctx, opts, bg.BlueGreenDeploymentWorkflow, plan)
 	if err != nil {
+		if temporal.IsWorkflowExecutionAlreadyStartedError(err) {
+			return "", bg.ErrDeploymentAlreadyExists
+		}
 		return "", fmt.Errorf("execute workflow: %w", err)
 	}
 	return run.GetID(), nil
 }
 
-func (s *temporalWorkflowStarter) ApproveDeployment(ctx context.Context, deploymentID string, payload bg.ApprovalPayload) error {
+func (s *temporalWorkflowClient) ApproveDeployment(ctx context.Context, deploymentID string, payload bg.ApprovalPayload) error {
 	return s.client.SignalWorkflow(ctx, "bg-deploy-"+deploymentID, "", bg.SignalApprove, payload)
 }
 
-func (s *temporalWorkflowStarter) RollbackDeployment(ctx context.Context, deploymentID string, payload bg.RollbackPayload) error {
+func (s *temporalWorkflowClient) RollbackDeployment(ctx context.Context, deploymentID string, payload bg.RollbackPayload) error {
 	return s.client.SignalWorkflow(ctx, "bg-deploy-"+deploymentID, "", bg.SignalRollback, payload)
+}
+
+func (s *temporalWorkflowClient) GetDeploymentStatus(ctx context.Context, deploymentID string) (bg.DeploymentStatus, error) {
+	resp, err := s.client.QueryWorkflow(ctx, "bg-deploy-"+deploymentID, "", bg.QueryDeploymentState)
+	if err != nil {
+		if isWorkflowNotFound(err) {
+			return bg.DeploymentStatus{}, bg.ErrDeploymentNotFound
+		}
+		return bg.DeploymentStatus{}, fmt.Errorf("query workflow: %w", err)
+	}
+	var status bg.DeploymentStatus
+	if err := resp.Get(&status); err != nil {
+		return bg.DeploymentStatus{}, fmt.Errorf("decode query result: %w", err)
+	}
+	return status, nil
+}
+
+// isWorkflowNotFound returns true when the Temporal server cannot find the workflow.
+func isWorkflowNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "workflow execution not found") ||
+		strings.Contains(msg, "workflow not found") ||
+		strings.Contains(msg, "EntityNotExistsError")
 }
 
 func envOr(key, fallback string) string {

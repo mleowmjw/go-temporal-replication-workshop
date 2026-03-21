@@ -32,6 +32,9 @@ const SignalApprove = "approve"
 // SignalRollback is the Temporal signal name for emergency rollback.
 const SignalRollback = "rollback"
 
+// QueryDeploymentState is the Temporal query type for reading deployment status.
+const QueryDeploymentState = "deployment_state"
+
 // MigrationPlan describes all SQL and metadata for a blue-green schema migration.
 // ExpandSQL adds new structure while keeping old structure intact.
 // ContractSQL removes old structure once all traffic is on the new app version.
@@ -65,33 +68,28 @@ type MigrationPlan struct {
 
 // VerifyQuery is a named SQL check run after the expand phase.
 type VerifyQuery struct {
-	Name        string
-	SQL         string
-	WantCount   int64 // expected COUNT(*) result
+	Name      string
+	SQL       string
+	WantCount int64 // expected COUNT(*) result
 }
 
 // PhaseTransition records a phase change with timestamp and optional reason.
 type PhaseTransition struct {
-	Phase     Phase
-	At        time.Time
-	Reason    string
+	Phase  Phase
+	At     time.Time
+	Reason string
 }
 
-// Deployment tracks the full lifecycle of one blue-green deployment.
-type Deployment struct {
+// DeploymentStatus is the query response returned by QueryDeploymentState.
+// It captures the full live state of the deployment directly from workflow memory.
+type DeploymentStatus struct {
 	ID      string
-	Plan    MigrationPlan
 	Phase   Phase
+	Plan    MigrationPlan
 	History []PhaseTransition
-
-	// AppCompatResult is populated after expand verification.
-	AppCompatResult *AppCompatResult
-
-	CreatedAt   time.Time
-	CompletedAt *time.Time
 }
 
-// DeploymentResult is the final output of a successful deployment workflow.
+// DeploymentResult is the final output of a completed or rolled-back workflow.
 type DeploymentResult struct {
 	DeploymentID string
 	Phase        Phase
