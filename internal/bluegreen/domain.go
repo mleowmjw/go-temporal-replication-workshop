@@ -54,15 +54,15 @@ const (
 )
 
 // LockTimeout returns the maximum duration a schema lock can be held in this environment.
-// dev=5m, staging=30m, prod=24h.
+// dev=1m, staging=15m, prod=24h.
 func (e Environment) LockTimeout() time.Duration {
 	switch e {
 	case EnvStaging:
-		return 30 * time.Minute
+		return 15 * time.Minute
 	case EnvProd:
 		return 24 * time.Hour
 	default: // dev and anything unrecognised
-		return 5 * time.Minute
+		return 1 * time.Minute
 	}
 }
 

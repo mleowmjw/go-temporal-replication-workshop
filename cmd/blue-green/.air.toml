@@ -8,7 +8,7 @@ tmp_dir = ".air-blue-green"
   bin        = "bin/blue-green"
   full_bin   = "bin/blue-green"
   delay      = 1000
-  include_ext = ["go", "toml"]
+  include_ext = ["go", "toml", "html"]
   include_dir = ["cmd/blue-green", "internal"]
   exclude_dir = [".air-blue-green", ".temporal", "vendor", "node_modules"]
 

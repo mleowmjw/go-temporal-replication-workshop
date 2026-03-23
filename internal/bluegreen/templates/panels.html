@@ -1,0 +1,399 @@
+{{/* ─── 0. FLASH BANNER ────────────────────────────────────────────────────── */}}
+{{define "flash-banner"}}
+<div id="flash-banner">
+  {{if .Flash}}
+  <div class="flash {{.FlashType}}">{{.Flash}}</div>
+  {{end}}
+</div>
+{{end}}
+
+
+{{/* ─── 1. CONTROL BAR ───────────────────────────────────────────────────── */}}
+{{define "control-bar"}}
+<article id="control-bar">
+  {{if not .Deployment}}
+    {{/* ── No active deployment: show start form ── */}}
+    <div class="panel-header">
+      <h3>Start Deployment</h3>
+    </div>
+    <p class="muted">No active deployment. Submit the workshop migration plan to begin.</p>
+
+    <div style="margin-top:0.5rem;border:1px solid var(--pico-muted-border-color);border-radius:6px;overflow:hidden;">
+      <div style="padding:0.6rem 1rem;cursor:pointer;display:flex;align-items:center;gap:0.5rem;background:rgba(255,255,255,0.03);"
+           data-on:click="$planOpen = !$planOpen">
+        <span data-text="$planOpen ? '▼' : '▶'">▼</span>
+        <strong style="font-size:0.9rem;">Migration Plan: rename-v1</strong>
+      </div>
+      <div data-show="$planOpen" style="padding:0.5rem 1rem 0.75rem;font-size:0.82rem;">
+        <p style="margin:0 0 0.5rem;"><strong>Description:</strong> Add display_name &amp; phone, drop full_name</p>
+        <div class="two-col" style="gap:0.5rem;">
+          <div>
+            <strong style="color:#6ea8fe;">Expand SQL</strong>
+            <ol style="margin:0.25rem 0 0.5rem;padding-left:1.5rem;font-size:0.78rem;">
+              <li><code>ADD COLUMN display_name TEXT</code></li>
+              <li><code>ADD COLUMN phone TEXT</code></li>
+              <li><code>SET display_name = full_name</code></li>
+            </ol>
+          </div>
+          <div>
+            <strong style="color:#ea868f;">Contract SQL</strong>
+            <ol style="margin:0.25rem 0 0.5rem;padding-left:1.5rem;font-size:0.78rem;">
+              <li><code>DROP COLUMN search_key</code></li>
+              <li><code>DROP COLUMN full_name</code></li>
+              <li><code>ADD search_key GENERATED AS (display_name)</code></li>
+            </ol>
+          </div>
+        </div>
+        <p style="margin:0;font-size:0.78rem;"><strong>Rollback:</strong> <code>DROP COLUMN IF EXISTS display_name, phone</code></p>
+      </div>
+    </div>
+
+    <button style="margin-top:0.75rem;" class="approve-btn" data-on:click="@post('/ui/deploy')">Start Deployment</button>
+
+  {{else}}
+    {{/* ── Active or completed deployment: show controls ── */}}
+    {{$d := .Deployment}}
+    <div class="panel-header">
+      <h3>Deployment Control</h3>
+      <span class="phase-badge {{$d.Phase}}">{{$d.Phase}}</span>
+    </div>
+    <p><strong>Plan:</strong> {{$d.Plan.ID}} — {{$d.Plan.Description}}</p>
+
+    {{if isApprovalPhase $d.Phase}}
+      <button class="approve-btn" data-on:click="@post('/ui/approve')" style="margin-top:0.5rem;">
+        {{approveLabel $d.Phase}}
+      </button>
+    {{else if isTerminalPhase $d.Phase}}
+      <p style="margin-top:0.75rem;">
+        {{if eq $d.Phase "complete"}}Migration complete! Schema is now live with the new columns.{{end}}
+        {{if eq $d.Phase "rolled_back"}}Deployment rolled back. Schema restored to original state.{{end}}
+        {{if eq $d.Phase "failed"}}Deployment failed. Check the Temporal UI for details.{{end}}
+      </p>
+      <button style="margin-top:0.5rem;" data-on:click="@post('/ui/deploy')">Start New Deployment</button>
+    {{else}}
+      <p class="muted" style="margin-top:0.5rem;">Working… waiting for phase to complete.</p>
+    {{end}}
+  {{end}}
+</article>
+{{end}}
+
+
+{{/* ─── 2. PHASE STEPPER (grouped: Plan / Expand / Contract) ───────────────── */}}
+{{define "phase-stepper"}}
+<article id="phase-stepper">
+
+  {{/* ── Plan group ── */}}
+  <div class="stepper-group">
+    <div class="stepper-group-label">Plan</div>
+    <div class="stepper">
+      {{range $i, $s := .Steps}}
+        {{if lt $i (planStepCount)}}
+        <div class="step {{$s.Class}}">
+          <div class="step-dot">{{if $s.Done}}&#10003;{{else}}{{add $i 1}}{{end}}</div>
+          <div class="step-label">{{$s.Label}}</div>
+        </div>
+        {{end}}
+      {{end}}
+    </div>
+  </div>
+
+  {{/* ── Expand group ── */}}
+  <div class="stepper-group">
+    <div class="stepper-group-label">Expand</div>
+    <div class="stepper">
+      {{range $i, $s := .Steps}}
+        {{if and (ge $i (planStepCount)) (lt $i (expandStepEnd))}}
+        <div class="step {{$s.Class}}">
+          <div class="step-dot">{{if $s.Done}}&#10003;{{else}}{{add $i 1}}{{end}}</div>
+          <div class="step-label">{{$s.Label}}</div>
+        </div>
+        {{end}}
+      {{end}}
+    </div>
+  </div>
+
+  {{/* ── Contract group ── */}}
+  <div class="stepper-group">
+    <div class="stepper-group-label">Contract</div>
+    <div class="stepper">
+      {{range $i, $s := .Steps}}
+        {{if ge $i (expandStepEnd)}}
+        <div class="step {{$s.Class}}">
+          <div class="step-dot">{{if $s.Done}}&#10003;{{else}}{{add $i 1}}{{end}}</div>
+          <div class="step-label">{{$s.Label}}</div>
+        </div>
+        {{end}}
+      {{end}}
+    </div>
+  </div>
+
+  {{/* ── Phase explanation ── */}}
+  {{if .Deployment}}
+  {{$d := .Deployment}}
+  <div class="phase-explain {{phaseExplainClass $d.Phase}}">
+    <strong>{{phaseTitle $d.Phase}}</strong><br>
+    {{phaseDescription $d.Phase}}
+  </div>
+
+  {{/* ── Rollback bar: visible during any active (non-terminal) phase ── */}}
+  {{if isActivePhase $d.Phase}}
+  <div class="rollback-bar">
+    <input type="text" data-bind="rollbackReason" placeholder="Rollback reason…">
+    <button class="big-rollback-btn" data-on:click="@post('/ui/rollback')">
+      Rollback Now
+    </button>
+  </div>
+  {{end}}
+
+  {{else}}
+  <div class="phase-explain">
+    <strong>Ready</strong><br>
+    No active deployment. Submit the migration plan to start the blue-green lifecycle.
+  </div>
+  {{end}}
+</article>
+{{end}}
+
+
+{{/* ─── 3. SCHEMA DIFF PANEL ─────────────────────────────────────────────── */}}
+{{define "schema-panel"}}
+<article id="schema-panel">
+  <div class="panel-header"><h3>Schema: inventory.customers</h3></div>
+
+  {{if not .DBConnected}}
+    <p class="no-data">DB not connected (BG_MODE=test)</p>
+  {{else if not .Schema}}
+    <p class="no-data">No schema data yet — table may not exist.</p>
+  {{else}}
+    <table>
+      <thead>
+        <tr>
+          <th>Column</th>
+          <th>Type</th>
+          <th>Nullable</th>
+          <th>Default / Generated</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Schema}}
+        <tr class="{{if .IsNew}}new-col{{end}}">
+          <td>
+            {{if .IsNew}}<ins>{{.Name}}</ins>{{else}}{{.Name}}{{end}}
+          </td>
+          <td>{{.DataType}}</td>
+          <td>{{if eq .IsNullable "YES"}}YES{{else}}<strong>NO</strong>{{end}}</td>
+          <td>
+            {{if .GenerationExpr}}<code class="gen">GENERATED AS {{.GenerationExpr}}</code>
+            {{else if .Default}}<code>{{.Default}}</code>
+            {{else}}<span class="muted">—</span>{{end}}
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+    {{if .HasNewCols}}<p class="muted" style="font-size:0.75rem;">highlighted = added by expand phase</p>{{end}}
+  {{end}}
+</article>
+{{end}}
+
+
+{{/* ─── 4. LIVE DATA PANEL ────────────────────────────────────────────────── */}}
+{{define "data-panel"}}
+<article id="data-panel">
+  <div class="panel-header"><h3>Live Rows (LIMIT 5)</h3></div>
+
+  {{if not .DBConnected}}
+    <p class="no-data">DB not connected (BG_MODE=test)</p>
+  {{else if not .Rows}}
+    <p class="no-data">No rows yet.</p>
+  {{else}}
+    <div style="overflow-x:auto;">
+    <table>
+      <thead>
+        <tr>{{range .RowHeaders}}<th>{{.}}</th>{{end}}</tr>
+      </thead>
+      <tbody>
+        {{range .Rows}}
+        <tr>{{range .}}<td>{{.}}</td>{{end}}</tr>
+        {{end}}
+      </tbody>
+    </table>
+    </div>
+  {{end}}
+</article>
+{{end}}
+
+
+{{/* ─── 5. APP COMPATIBILITY PANEL ───────────────────────────────────────── */}}
+{{define "compat-panel"}}
+<article id="compat-panel">
+  <div class="panel-header"><h3>App Compatibility</h3></div>
+
+  {{if not .DBConnected}}
+    <p class="no-data">DB not connected (BG_MODE=test)</p>
+  {{else}}
+  <div class="two-col">
+    <div>
+      <p><strong>Blue App (v1)</strong>
+        {{if allPass .BlueCompat}}<span class="compat-pass">all pass</span>{{else}}<span class="compat-fail">errors</span>{{end}}
+      </p>
+      {{range .BlueCompat}}
+      <div style="margin-bottom:0.5rem;">
+        <span class="{{if .Pass}}compat-pass{{else}}compat-fail{{end}}">
+          {{if .Pass}}OK{{else}}FAIL{{end}} {{.Name}}
+        </span>
+        {{if not .Pass}}<div class="query-sql">{{.Err}}</div>{{end}}
+      </div>
+      {{end}}
+    </div>
+    <div>
+      <p><strong>Green App (v2)</strong>
+        {{if allPass .GreenCompat}}<span class="compat-pass">all pass</span>{{else}}<span class="compat-fail">errors</span>{{end}}
+      </p>
+      {{range .GreenCompat}}
+      <div style="margin-bottom:0.5rem;">
+        <span class="{{if .Pass}}compat-pass{{else}}compat-fail{{end}}">
+          {{if .Pass}}OK{{else}}FAIL{{end}} {{.Name}}
+        </span>
+        {{if not .Pass}}<div class="query-sql">{{.Err}}</div>{{end}}
+      </div>
+      {{end}}
+    </div>
+  </div>
+  <div style="margin-top:0.75rem;">
+    <div class="muted" style="font-size:0.8rem;cursor:pointer;user-select:none;"
+         data-on:click="$queriesOpen = !$queriesOpen">
+      <span data-text="$queriesOpen ? '▼' : '▶'">▶</span> Show SQL queries
+    </div>
+    <div data-show="$queriesOpen" class="two-col" style="margin-top:0.5rem;">
+      <div>
+        {{range .BlueCompat}}
+        <p style="margin:0 0 0.25rem;font-size:0.75rem;"><strong>{{.Name}}:</strong><br><code>{{.SQL}}</code></p>
+        {{end}}
+      </div>
+      <div>
+        {{range .GreenCompat}}
+        <p style="margin:0 0 0.25rem;font-size:0.75rem;"><strong>{{.Name}}:</strong><br><code>{{.SQL}}</code></p>
+        {{end}}
+      </div>
+    </div>
+  </div>
+  {{end}}
+</article>
+{{end}}
+
+
+{{/* ─── 6. COORDINATOR LOCK PANEL ────────────────────────────────────────── */}}
+{{define "lock-panel"}}
+<article id="lock-panel">
+  <div class="panel-header"><h3>Schema Lock (DatabaseOpsWorkflow)</h3></div>
+
+  {{if not .OpsState}}
+    <p class="no-data">Coordinator not started yet. It starts automatically when you submit a deployment.</p>
+  {{else}}
+  {{$s := .OpsState}}
+  <table style="margin-bottom:0.5rem;">
+    <tr><td class="muted">Database</td><td><code>{{$s.DatabaseID}}</code></td></tr>
+    <tr><td class="muted">Environment</td><td><span class="phase-badge plan_review">{{$s.Environment}}</span></td></tr>
+    <tr><td class="muted">Lock timeout</td><td>{{lockTimeout $s.Environment}}</td></tr>
+    <tr><td class="muted">Completed ops</td><td>{{len $s.CompletedOps}}</td></tr>
+  </table>
+
+  {{if $s.ActiveDeployment}}
+  {{$a := $s.ActiveDeployment}}
+  <div class="locked-banner">
+    <strong>Schema locked</strong> by plan <code>{{$a.PlanID}}</code><br>
+    <span class="muted" style="font-size:0.8rem;">Acquired {{formatTime $a.StartedAt}} · Workflow: <code>{{$a.WorkflowID}}</code></span>
+  </div>
+  {{else}}
+  <div class="unlocked-banner">
+    <strong>Schema unlocked</strong> — ready for a new deployment.
+  </div>
+  {{end}}
+
+  {{if $s.CompletedOps}}
+  <div style="margin-top:0.75rem;">
+    <div class="muted" style="font-size:0.8rem;cursor:pointer;user-select:none;"
+         data-on:click="$opsOpen = !$opsOpen">
+      <span data-text="$opsOpen ? '▼' : '▶'">▶</span> Completed ops ({{len $s.CompletedOps}})
+    </div>
+    <div data-show="$opsOpen">
+      <table style="margin-top:0.5rem;">
+        <thead><tr><th>Plan</th><th>Final Phase</th><th>Completed At</th></tr></thead>
+        <tbody>
+          {{range $s.CompletedOps}}
+          <tr>
+            <td><code>{{.PlanID}}</code></td>
+            <td><span class="phase-badge {{.FinalPhase}}">{{.FinalPhase}}</span></td>
+            <td class="muted">{{formatTime .CompletedAt}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {{end}}
+  {{end}}
+</article>
+{{end}}
+
+
+{{/* ─── 7. HISTORY TIMELINE ───────────────────────────────────────────────── */}}
+{{define "history-panel"}}
+<article id="history-panel">
+  <div class="panel-header"><h3>Phase History</h3></div>
+
+  {{if not .Deployment}}
+    <p class="no-data">No deployment history yet.</p>
+  {{else if not .Deployment.History}}
+    <p class="no-data">No transitions recorded.</p>
+  {{else}}
+    <ul class="timeline">
+      {{range .Deployment.History}}
+      <li class="timeline-item">
+        <span class="timeline-time">{{formatTime .At}}</span>
+        <div>
+          <span class="phase-badge {{.Phase}}">{{.Phase}}</span>
+          {{if .Reason}}<div class="timeline-reason">{{.Reason}}</div>{{end}}
+        </div>
+      </li>
+      {{end}}
+    </ul>
+  {{end}}
+</article>
+{{end}}
+
+
+{{/* ─── 8. DEBUG PANEL (fixed viewport overlay) ──────────────────────────── */}}
+{{define "debug-panel"}}
+<article id="debug-panel" class="debug-panel">
+  <div style="padding:0.4rem 0.75rem;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #30363d;flex-shrink:0;">
+    <div style="display:flex;align-items:center;gap:0.5rem;">
+      <span style="font-size:0.8rem;font-weight:700;color:#58a6ff;">HTTP Debug Log</span>
+      <span style="font-size:0.65rem;color:#8b949e;">(equivalent curl commands)</span>
+      {{if .DebugLog}}<span style="font-size:0.65rem;color:#58a6ff;font-weight:700;">· {{len .DebugLog}} entries</span>{{end}}
+    </div>
+    <span style="font-size:0.7rem;cursor:pointer;color:#8b949e;user-select:none;"
+          data-on:click="$debugOpen = !$debugOpen"
+          data-text="$debugOpen ? '▲ collapse' : '▼ expand'">▲ collapse</span>
+  </div>
+  <div data-show="$debugOpen" class="debug-panel-body">
+    {{if not .DebugLog}}
+    <div class="debug-entry" style="color:#8b949e;font-style:italic;">
+      No requests yet. Click Start Deployment, Approve, or Rollback to see HTTP calls here.
+    </div>
+    {{else}}
+    {{range .DebugLog}}
+    <div class="debug-entry">
+      <div>
+        <span class="debug-time">{{.Time}}</span>
+        <span class="debug-status {{if hasPrefix .Status "2"}}ok{{else}}err{{end}}">{{.Status}}</span>
+      </div>
+      <div class="debug-curl">$ {{.Curl}}</div>
+      {{if .Body}}<div class="debug-body">→ {{.Body}}</div>{{end}}
+    </div>
+    {{end}}
+    {{end}}
+  </div>
+</article>
+{{end}}

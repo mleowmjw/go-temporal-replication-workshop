@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blue-Green Workshop Dashboard</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <script type="module" src="https://cdn.jsdelivr.net/gh/starfederation/datastar@1.0.0-RC.8/bundles/datastar.js"></script>
+  <style>
+    :root {
+      --phase-pending:   #6c757d;
+      --phase-active:    #0d6efd;
+      --phase-warn:      #fd7e14;
+      --phase-danger:    #dc3545;
+      --phase-success:   #198754;
+      --phase-rolled:    #6f42c1;
+    }
+    body { padding-bottom: 220px; }
+    h1 { margin-bottom: 0.25rem; }
+    .subtitle { color: var(--pico-muted-color); margin-bottom: 1.5rem; font-size: 0.9rem; }
+
+    /* ── Phase stepper ─────────────────────────────────────── */
+    .stepper-group { margin-bottom: 0.25rem; }
+    .stepper-group-label {
+      font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.1em;
+      color: var(--pico-muted-color); margin-bottom: 0.25rem; padding-left: 0.25rem;
+      font-weight: 700;
+    }
+    .stepper { display: flex; gap: 0; overflow-x: auto; padding: 0.25rem 0 0.5rem; }
+    .step {
+      display: flex; flex-direction: column; align-items: center;
+      min-width: 90px; flex: 1; position: relative;
+    }
+    .step:not(:last-child)::after {
+      content: ''; position: absolute; top: 14px; left: 50%; right: -50%;
+      height: 2px; background: var(--pico-muted-border-color); z-index: 0;
+    }
+    .step.done:not(:last-child)::after { background: var(--phase-success); }
+    .step.current:not(:last-child)::after { background: var(--phase-active); }
+    .step-dot {
+      width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--pico-muted-border-color);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.7rem; font-weight: bold; background: var(--pico-background-color);
+      position: relative; z-index: 1; transition: all 0.3s;
+    }
+    .step.done .step-dot   { background: var(--phase-success); border-color: var(--phase-success); color: white; }
+    .step.current .step-dot { background: var(--phase-active); border-color: var(--phase-active); color: white; box-shadow: 0 0 0 4px rgba(13,110,253,0.25); }
+    .step.rollback .step-dot { background: var(--phase-rolled); border-color: var(--phase-rolled); color: white; }
+    .step.failed .step-dot   { background: var(--phase-danger); border-color: var(--phase-danger); color: white; }
+    .step-label { font-size: 0.65rem; text-align: center; margin-top: 6px; color: var(--pico-muted-color); }
+    .step.current .step-label { color: var(--pico-color); font-weight: bold; }
+
+    /* ── Phase explanation ──────────────────────────────────── */
+    .phase-explain { margin-top: 0.75rem; padding: 0.75rem 1rem; border-radius: 6px;
+      background: rgba(13,110,253,0.1); border-left: 4px solid var(--phase-active); }
+    .phase-explain.warn { background: rgba(253,126,20,0.1); border-color: var(--phase-warn); }
+    .phase-explain.danger { background: rgba(220,53,69,0.1); border-color: var(--phase-danger); }
+    .phase-explain.success { background: rgba(25,135,84,0.1); border-color: var(--phase-success); }
+    .phase-explain.rolled { background: rgba(111,66,193,0.1); border-color: var(--phase-rolled); }
+
+    /* ── Rollback bar ──────────────────────────────────────── */
+    .rollback-bar {
+      display: flex; align-items: center; gap: 0.75rem; margin-top: 0.75rem;
+      padding: 0.5rem 0.75rem; border-radius: 6px;
+      background: rgba(220,53,69,0.08); border: 1px solid rgba(220,53,69,0.25);
+    }
+    .rollback-bar .big-rollback-btn {
+      margin: 0; padding: 0.5rem 1.25rem; white-space: nowrap;
+      background: #dc3545; border-color: #dc3545; color: white;
+      font-weight: 700; font-size: 0.85rem; border-radius: 6px;
+    }
+    .rollback-bar .big-rollback-btn:hover { background: #bb2d3b; border-color: #b02a37; }
+    .rollback-bar input { margin: 0; flex: 1; min-width: 140px; font-size: 0.85rem; }
+
+    /* ── Flash message ─────────────────────────────────────── */
+    .flash { padding: 0.6rem 1rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.85rem; }
+    .flash.ok  { background: rgba(25,135,84,0.15); border: 1px solid #19875455; color: #75b798; }
+    .flash.err { background: rgba(220,53,69,0.15); border: 1px solid #dc354555; color: #ea868f; }
+
+    /* ── Phase badges ──────────────────────────────────────── */
+    .phase-badge {
+      display: inline-block; padding: 0.2em 0.6em; border-radius: 4px;
+      font-size: 0.75rem; font-weight: 600; font-family: monospace;
+    }
+    .phase-badge.pending, .phase-badge.plan_review { background: #6c757d22; color: #adb5bd; border: 1px solid #6c757d55; }
+    .phase-badge.expanding, .phase-badge.expand_verify { background: #0d6efd22; color: #6ea8fe; border: 1px solid #0d6efd55; }
+    .phase-badge.cutover { background: #ffc10722; color: #ffda6a; border: 1px solid #ffc10755; }
+    .phase-badge.monitoring { background: #fd7e1422; color: #feb272; border: 1px solid #fd7e1455; }
+    .phase-badge.contract_wait, .phase-badge.contracting { background: #dc354522; color: #ea868f; border: 1px solid #dc354555; }
+    .phase-badge.complete { background: #19875422; color: #75b798; border: 1px solid #19875455; }
+    .phase-badge.rolled_back { background: #6f42c122; color: #a98eda; border: 1px solid #6f42c155; }
+    .phase-badge.failed { background: #dc354522; color: #ea868f; border: 1px solid #dc354555; }
+
+    /* ── Approve / rollback buttons ────────────────────────── */
+    .approve-btn { margin-bottom: 0; }
+    .rollback-btn { margin-bottom: 0; }
+
+    /* ── Two-col layout ────────────────────────────────────── */
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    @media (max-width: 768px) { .two-col { grid-template-columns: 1fr; } }
+
+    /* ── Schema table highlights ────────────────────────────── */
+    tr.added-col td { background: rgba(25,135,84,0.15); }
+    tr.removed-col td { background: rgba(220,53,69,0.1); text-decoration: line-through; color: var(--pico-muted-color); }
+    tr.new-col td { background: rgba(13,110,253,0.12); }
+    code.gen { color: #a98eda; font-size: 0.78rem; }
+
+    /* ── Compat pass/fail ──────────────────────────────────── */
+    .compat-pass { color: #75b798; }
+    .compat-fail { color: #ea868f; }
+    .query-sql { font-size: 0.75rem; color: var(--pico-muted-color); font-family: monospace; margin-top: 2px; }
+
+    /* ── Lock panel ────────────────────────────────────────── */
+    .locked-banner { background: rgba(220,53,69,0.12); border: 1px solid #dc354555; border-radius: 6px; padding: 0.75rem; }
+    .unlocked-banner { background: rgba(25,135,84,0.1); border: 1px solid #19875455; border-radius: 6px; padding: 0.75rem; }
+
+    /* ── Timeline ──────────────────────────────────────────── */
+    .timeline { list-style: none; padding: 0; margin: 0; }
+    .timeline-item { display: flex; gap: 1rem; padding: 0.4rem 0; align-items: flex-start; }
+    .timeline-item:not(:last-child) { border-bottom: 1px solid var(--pico-muted-border-color); }
+    .timeline-time { color: var(--pico-muted-color); font-size: 0.75rem; white-space: nowrap; min-width: 160px; font-family: monospace; }
+    .timeline-reason { color: var(--pico-muted-color); font-size: 0.8rem; margin-top: 2px; }
+
+    /* ── Debug overlay (fixed at viewport bottom) ──────────── */
+    .debug-panel {
+      position: fixed; bottom: 0; left: 0; right: 0; z-index: 9999;
+      background: #0d1117; border-top: 2px solid #58a6ff;
+      box-shadow: 0 -4px 20px rgba(0,0,0,0.6);
+      max-height: 35vh; display: flex; flex-direction: column;
+      margin: 0; border-radius: 0;
+    }
+    .debug-panel-body {
+      overflow-y: auto; flex: 1;
+    }
+    .debug-entry { border-bottom: 1px solid #21262d; padding: 0.4rem 0.75rem; font-size: 0.75rem; font-family: monospace; }
+    .debug-entry:last-child { border-bottom: none; }
+    .debug-time { color: #8b949e; margin-right: 0.5rem; }
+    .debug-status { font-weight: 700; margin-right: 0.5rem; }
+    .debug-status.ok { color: #3fb950; }
+    .debug-status.err { color: #f85149; }
+    .debug-curl { color: #c9d1d9; word-break: break-all; }
+    .debug-body { color: #8b949e; margin-top: 2px; word-break: break-all; }
+
+    /* ── Misc ──────────────────────────────────────────────── */
+    .panel-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
+    .panel-header h3 { margin: 0; }
+    .muted { color: var(--pico-muted-color); font-size: 0.85rem; }
+    .no-data { color: var(--pico-muted-color); font-style: italic; padding: 1rem 0; text-align: center; }
+    article { margin-bottom: 1rem; }
+    table { font-size: 0.85rem; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    @media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main class="container"
+        data-signals='{"rollbackReason":"emergency rollback","approveNote":"","planOpen":true,"queriesOpen":false,"opsOpen":false,"debugOpen":true}'
+        {{/* SSE auto-refresh disabled — use the Reload button instead */}}
+        >
+
+    <header style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;">
+      <div>
+        <h1 style="margin:0;">Blue-Green Workshop</h1>
+        <p class="subtitle" style="margin:0;">Dev dashboard · Temporal + Datastar</p>
+      </div>
+      <button style="margin:0;width:auto;padding:0.4rem 1rem;font-size:0.85rem;" data-on:click="@get('/ui/state')">Reload</button>
+    </header>
+
+    {{template "flash-banner" .}}
+    {{template "phase-stepper" .}}
+    {{template "control-bar" .}}
+
+    <div class="grid-2">
+      {{template "schema-panel" .}}
+      {{template "data-panel" .}}
+    </div>
+    <div class="grid-2">
+      {{template "compat-panel" .}}
+      {{template "lock-panel" .}}
+    </div>
+
+    {{template "history-panel" .}}
+
+  </main>
+
+  {{/* Debug panel lives outside <main> so position:fixed isn't clipped */}}
+  {{template "debug-panel" .}}
+</body>
+</html>

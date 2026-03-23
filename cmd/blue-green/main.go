@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -45,11 +46,13 @@ func run(log *slog.Logger) error {
 
 	// ── Migrator: real Postgres by default, fake when BG_MODE=test ───────────
 	var migrator bg.DatabaseMigrator
+	var pool *pgxpool.Pool
 	if envOr("BG_MODE", "e2e") == "test" {
 		log.Info("using fake in-memory migrator (BG_MODE=test)")
 		migrator = bg.NewFakeDatabaseMigrator()
 	} else {
-		pool, err := pgxpool.New(ctx, dbURL)
+		var err error
+		pool, err = pgxpool.New(ctx, dbURL)
 		if err != nil {
 			return fmt.Errorf("connect to postgres (%s): %w", dbURL, err)
 		}
@@ -112,6 +115,17 @@ func run(log *slog.Logger) error {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
+	// ── Workshop UI ───────────────────────────────────────────────────────────
+	log.Info("initialising workshop UI handler", "pool_nil", pool == nil)
+	uiHandler, err := bg.NewUIHandler(pool, wfClient, app, log)
+	if err != nil {
+		log.Error("FATAL: failed to init UI handler", "error", err)
+		return fmt.Errorf("init UI handler: %w", err)
+	}
+	log.Info("registering workshop UI routes (GET /, GET /ui/state, POST /ui/*)")
+	uiHandler.RegisterUIRoutes(mux)
+	logRouteProbes(log, mux)
+
 	srv := &http.Server{
 		Addr:         listenAddr,
 		Handler:      mux,
@@ -119,19 +133,40 @@ func run(log *slog.Logger) error {
 		WriteTimeout: 10 * time.Second,
 	}
 
+	// Bind explicitly so port conflicts fail immediately and terminate the process.
+	ln, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", listenAddr, err)
+	}
+	serveErrCh := make(chan error, 1)
 	go func() {
 		log.Info("HTTP server listening", "addr", listenAddr)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error("HTTP server error", "error", err)
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serveErrCh <- err
+			return
 		}
+		serveErrCh <- nil
 	}()
 
-	<-ctx.Done()
-	log.Info("shutting down")
+	select {
+	case err := <-serveErrCh:
+		if err != nil {
+			log.Error("HTTP server error", "error", err)
+			return fmt.Errorf("serve HTTP: %w", err)
+		}
+		return errors.New("HTTP server stopped unexpectedly")
+	case <-ctx.Done():
+		log.Info("shutting down")
 
-	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	return srv.Shutdown(shutCtx)
+		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutCtx); err != nil {
+			return fmt.Errorf("shutdown HTTP server: %w", err)
+		}
+		// Ensure serve goroutine exits before returning.
+		_ = <-serveErrCh
+		return nil
+	}
 }
 
 // temporalWorkflowClient implements bg.WorkflowClient using the real Temporal client.
@@ -161,7 +196,7 @@ func (s *temporalWorkflowClient) StartDeployment(ctx context.Context, plan bg.Mi
 		WorkflowID:   s.dbOpsWorkflowID,
 		UpdateName:   bg.UpdateRequestDeployment,
 		WaitForStage: client.WorkflowUpdateStageCompleted,
-		Args:         []interface{}{bg.DeploymentLockRequest{PlanID: plan.ID, WorkflowID: deploymentWorkflowID}},
+		Args:         []any{bg.DeploymentLockRequest{PlanID: plan.ID, WorkflowID: deploymentWorkflowID}},
 	})
 	if err != nil {
 		if isSchemaLockedError(err) {
@@ -273,4 +308,43 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+type routeProbe struct {
+	Method string
+	Path   string
+}
+
+// logRouteProbes prints how net/http ServeMux resolves each expected route.
+// This helps verify there is no pattern conflict between API and UI routes.
+func logRouteProbes(log *slog.Logger, mux *http.ServeMux) {
+	probes := []routeProbe{
+		{Method: http.MethodGet, Path: "/"},
+		{Method: http.MethodGet, Path: "/ui"},
+		{Method: http.MethodGet, Path: "/ui/"},
+		{Method: http.MethodGet, Path: "/ui/state"},
+		{Method: http.MethodGet, Path: "/healthz"},
+		{Method: http.MethodGet, Path: "/v1/database"},
+		{Method: http.MethodGet, Path: "/v1/deployments/demo"},
+		{Method: http.MethodPost, Path: "/v1/deployments"},
+		{Method: http.MethodPost, Path: "/v1/deployments/demo/approve"},
+		{Method: http.MethodPost, Path: "/v1/deployments/demo/rollback"},
+		{Method: http.MethodPost, Path: "/ui/deploy"},
+		{Method: http.MethodPost, Path: "/ui/approve"},
+		{Method: http.MethodPost, Path: "/ui/rollback"},
+	}
+
+	for _, p := range probes {
+		req, err := http.NewRequest(p.Method, "http://route-probe.local"+p.Path, nil)
+		if err != nil {
+			log.Error("route probe request build failed", "method", p.Method, "path", p.Path, "error", err)
+			continue
+		}
+		_, pattern := mux.Handler(req)
+		if pattern == "" {
+			log.Warn("route probe unmatched", "method", p.Method, "path", p.Path)
+			continue
+		}
+		log.Info("route probe matched", "method", p.Method, "path", p.Path, "pattern", pattern)
+	}
 }

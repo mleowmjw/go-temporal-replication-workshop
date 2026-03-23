@@ -415,3 +415,29 @@ ALTER TABLE inventory.customers
 Always use schema-qualified names (`inventory.customers`, not `customers`) when
 the table is not in the `public` schema, since PostgreSQL's `search_path` may
 not include custom schemas by default in connection pools.
+
+### Datastar attribute syntax
+
+Datastar uses **colon** separators for modifier-based attributes, **NOT hyphens**:
+
+| Correct (colon) | WRONG (hyphen) |
+|---|---|
+| `data-on:click="@post('/x')"` | ~~`data-on-click="@post('/x')"`~~ |
+| `data-on:keydown="…"` | ~~`data-on-keydown="…"`~~ |
+| `data-bind:foo-bar` | ~~`data-bind-fooBar`~~ |
+
+- `data-on:click` — colon between `on` and the DOM event name
+- `data-bind:signal-name` — colon between `bind` and the signal; hyphenated
+  names auto-convert to camelCase (`foo-bar` → `$fooBar`)
+- Alternatively use the value form: `data-bind="signalName"`
+- `data-show`, `data-text`, `data-signals` — no modifier, value is an expression
+
+Using hyphens instead of colons silently fails: Datastar does not recognise the
+attribute, no event listener is attached, and no network request fires. Chrome
+DevTools will show zero requests on click.
+
+### Datastar debug panel positioning
+
+Use `position: fixed; bottom: 0;` for always-visible debug overlays. If the
+panel is inside a Datastar-managed container, morphing may reset its position.
+Place it outside `<main>` to avoid container width constraints.

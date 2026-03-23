@@ -58,12 +58,24 @@ func NewHandler(client WorkflowClient, log *slog.Logger) *Handler {
 
 // RegisterRoutes mounts all blue-green routes on mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
+	routes := []string{
+		"POST /v1/deployments",
+		"GET /v1/deployments/{id}",
+		"POST /v1/deployments/{id}/approve",
+		"POST /v1/deployments/{id}/rollback",
+		"GET /v1/database",
+		"GET /healthz",
+	}
+	h.log.Info("registering API routes", "count", len(routes), "routes", routes)
+
 	mux.HandleFunc("POST /v1/deployments", h.createDeployment)
 	mux.HandleFunc("GET /v1/deployments/{id}", h.getDeployment)
 	mux.HandleFunc("POST /v1/deployments/{id}/approve", h.approveDeployment)
 	mux.HandleFunc("POST /v1/deployments/{id}/rollback", h.rollbackDeployment)
 	mux.HandleFunc("GET /v1/database", h.getDatabaseOpsState)
 	mux.HandleFunc("GET /healthz", h.healthz)
+
+	h.log.Info("API routes registered")
 }
 
 // createDeployment POST /v1/deployments

@@ -62,7 +62,7 @@ func (s *dbOpsWorkflowSuite) sendLock(planID, workflowID string, outGranted *boo
 			}
 		},
 		OnAccept: func() {},
-		OnComplete: func(v interface{}, err error) {
+		OnComplete: func(v any, err error) {
 			if err != nil {
 				if outErr != nil {
 					*outErr = err
@@ -219,7 +219,7 @@ func (s *dbOpsWorkflowSuite) TestLockRejection() {
 func (s *dbOpsWorkflowSuite) TestLockTimeoutSendsRollbackSignal() {
 	cfg := bluegreen.DatabaseOpsConfig{
 		DatabaseID:  "localhost-5435-appdb",
-		Environment: bluegreen.EnvDev, // 5-minute lock timeout
+		Environment: bluegreen.EnvDev, // 1-minute lock timeout
 	}
 
 	rollbackSignalled := false
@@ -243,7 +243,7 @@ func (s *dbOpsWorkflowSuite) TestLockTimeoutSendsRollbackSignal() {
 		require.True(s.T(), lockGranted, "lock must be granted")
 	}, 200*time.Millisecond)
 
-	// After the lock timer fires (5 minutes) and the mock goroutine completes,
+	// After the lock timer fires (1 minute) and the mock goroutine completes,
 	// send the deployment_complete signal. We schedule this AFTER the timeout so
 	// the mock goroutine has had time to run and post its callbacks.
 	s.env.RegisterDelayedCallback(func() {

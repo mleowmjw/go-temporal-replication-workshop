@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Datastar Debug Sandbox</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <script type="module" src="https://cdn.jsdelivr.net/gh/starfederation/datastar@1.0.0-RC.8/bundles/datastar.js"></script>
+  <style>
+    body { padding-bottom: 220px; }
+    h1 { margin-bottom: 0.25rem; }
+    .subtitle { color: var(--pico-muted-color); margin-bottom: 1.5rem; font-size: 0.9rem; }
+    .sandbox-card {
+      border: 1px solid var(--pico-muted-border-color); border-radius: 8px;
+      padding: 1rem; margin-bottom: 1rem;
+    }
+    .sandbox-card h3 { margin: 0 0 0.5rem; font-size: 1rem; }
+    .sandbox-card .hint {
+      font-size: 0.75rem; color: var(--pico-muted-color); font-family: monospace;
+      background: rgba(255,255,255,0.04); padding: 0.3rem 0.5rem; border-radius: 4px;
+      margin-bottom: 0.75rem; display: block;
+    }
+    .result-box {
+      background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+      padding: 0.5rem 0.75rem; font-family: monospace; font-size: 0.8rem;
+      color: #c9d1d9; min-height: 2rem; margin-top: 0.5rem;
+    }
+    .pass { color: #3fb950; font-weight: 700; }
+    .fail { color: #f85149; font-weight: 700; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    @media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
+    .flash { padding: 0.6rem 1rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.85rem; }
+    .flash.ok  { background: rgba(25,135,84,0.15); border: 1px solid #19875455; color: #75b798; }
+    .flash.err { background: rgba(220,53,69,0.15); border: 1px solid #dc354555; color: #ea868f; }
+
+    /* Debug overlay (same as main app) */
+    .debug-panel {
+      position: fixed; bottom: 0; left: 0; right: 0; z-index: 9999;
+      background: #0d1117; border-top: 2px solid #58a6ff;
+      box-shadow: 0 -4px 20px rgba(0,0,0,0.6);
+      max-height: 35vh; display: flex; flex-direction: column;
+      margin: 0; border-radius: 0;
+    }
+    .debug-panel-body { overflow-y: auto; flex: 1; }
+    .debug-entry { border-bottom: 1px solid #21262d; padding: 0.4rem 0.75rem; font-size: 0.75rem; font-family: monospace; }
+    .debug-entry:last-child { border-bottom: none; }
+    .debug-time { color: #8b949e; margin-right: 0.5rem; }
+    .debug-status { font-weight: 700; margin-right: 0.5rem; }
+    .debug-status.ok { color: #3fb950; }
+    .debug-status.err { color: #f85149; }
+    .debug-curl { color: #c9d1d9; word-break: break-all; }
+    .debug-body { color: #8b949e; margin-top: 2px; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <main class="container"
+        data-signals='{
+          "counter": 0,
+          "echoInput": "hello world",
+          "toggleOpen": false,
+          "selectVal": "alpha",
+          "debugOpen": true
+        }'>
+
+    <header style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;">
+      <div>
+        <h1 style="margin:0;">Datastar Debug Sandbox</h1>
+        <p class="subtitle" style="margin:0;">Experiment with Datastar attributes · <a href="/">← Back to Dashboard</a></p>
+      </div>
+    </header>
+
+    {{/* ── Flash banner (patched by SSE) ── */}}
+    <div id="sandbox-flash"></div>
+
+    <div class="grid-2">
+
+      {{/* ═══════════════════════════════════════════════════════════ */}}
+      {{/* 1. CLICK → POST (the pattern used by Start Deployment)    */}}
+      {{/* ═══════════════════════════════════════════════════════════ */}}
+      <div class="sandbox-card">
+        <h3>1. Click → POST (SSE response)</h3>
+        <code class="hint">data-on:click="@post('/ui/debug/echo')"</code>
+        <p style="font-size:0.85rem;">
+          Click the button. Datastar sends a POST to the dummy endpoint.
+          The server responds with SSE that patches the result box below.
+        </p>
+        <button data-on:click="@post('/ui/debug/echo')">Send POST</button>
+        <div id="echo-result" class="result-box">Waiting for click…</div>
+      </div>
+
+      {{/* ═══════════════════════════════════════════════════════════ */}}
+      {{/* 2. CLICK → GET                                            */}}
+      {{/* ═══════════════════════════════════════════════════════════ */}}
+      <div class="sandbox-card">
+        <h3>2. Click → GET (SSE response)</h3>
+        <code class="hint">data-on:click="@get('/ui/debug/ping')"</code>
+        <p style="font-size:0.85rem;">
+          Same as above but with GET. Also patches the result box via SSE.
+        </p>
+        <button data-on:click="@get('/ui/debug/ping')">Send GET</button>
+        <div id="ping-result" class="result-box">Waiting for click…</div>
+      </div>
+
+      {{/* ═══════════════════════════════════════════════════════════ */}}
+      {{/* 3. SIGNALS + TWO-WAY BINDING                              */}}
+      {{/* ═══════════════════════════════════════════════════════════ */}}
+      <div class="sandbox-card">
+        <h3>3. Signals + Two-way Binding</h3>
+        <code class="hint">data-bind="echoInput" · data-text="$echoInput"</code>
+        <p style="font-size:0.85rem;">Type below — the text mirrors instantly (no server round-trip).</p>
+        <input type="text" data-bind="echoInput" placeholder="Type something…">
+        <div class="result-box">
+          Signal value: <strong data-text="$echoInput"></strong>
+        </div>
+      </div>
+
+      {{/* ═══════════════════════════════════════════════════════════ */}}
+      {{/* 4. COUNTER (signal math)                                  */}}
+      {{/* ═══════════════════════════════════════════════════════════ */}}
+      <div class="sandbox-card">
+        <h3>4. Counter (signal math)</h3>
+        <code class="hint">data-on:click="$counter++" · data-text="$counter"</code>
+        <div style="display:flex;gap:0.5rem;align-items:center;margin-top:0.5rem;">
+          <button data-on:click="$counter--" style="width:auto;padding:0.4rem 1rem;">−</button>
+          <span style="font-size:1.5rem;font-weight:700;min-width:3rem;text-align:center;" data-text="$counter"></span>
+          <button data-on:click="$counter++" style="width:auto;padding:0.4rem 1rem;">+</button>
+          <button data-on:click="$counter = 0" style="width:auto;padding:0.4rem 1rem;font-size:0.8rem;" class="secondary">Reset</button>
+        </div>
+      </div>
+
+      {{/* ═══════════════════════════════════════════════════════════ */}}
+      {{/* 5. TOGGLE (data-show)                                     */}}
+      {{/* ═══════════════════════════════════════════════════════════ */}}
+      <div class="sandbox-card">
+        <h3>5. Toggle (data-show)</h3>
+        <code class="hint">data-on:click="$toggleOpen = !$toggleOpen" · data-show="$toggleOpen"</code>
+        <button data-on:click="$toggleOpen = !$toggleOpen" style="margin-top:0.5rem;">
+          <span data-text="$toggleOpen ? 'Hide' : 'Show'"></span> Content
+        </button>
+        <div data-show="$toggleOpen" class="result-box" style="margin-top:0.5rem;">
+          This content is toggled via <code>data-show</code>.
+          The signal <code>$toggleOpen</code> controls visibility.
+        </div>
+      </div>
+
+      {{/* ═══════════════════════════════════════════════════════════ */}}
+      {{/* 6. POST WITH SIGNAL DATA                                  */}}
+      {{/* ═══════════════════════════════════════════════════════════ */}}
+      <div class="sandbox-card">
+        <h3>6. POST with Signal Data</h3>
+        <code class="hint">data-on:click="@post('/ui/debug/mirror')" — sends all signals</code>
+        <p style="font-size:0.85rem;">
+          Datastar automatically sends all signals as JSON in the request body.
+          The server echoes them back so you can see what gets sent.
+        </p>
+        <button data-on:click="@post('/ui/debug/mirror')">Send Signals to Server</button>
+        <div id="mirror-result" class="result-box">Waiting for click…</div>
+      </div>
+
+    </div>
+
+    {{/* ═══════════════════════════════════════════════════════════ */}}
+    {{/* 7. CHEAT SHEET                                            */}}
+    {{/* ═══════════════════════════════════════════════════════════ */}}
+    <article style="margin-top:1rem;">
+      <h3>Datastar Quick Reference</h3>
+      <table style="font-size:0.82rem;">
+        <thead>
+          <tr><th>Attribute</th><th>Purpose</th><th>Example</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>data-signals</code></td><td>Declare reactive state</td><td><code>data-signals='{"count":0}'</code></td></tr>
+          <tr><td><code>data-on:click</code></td><td>Event listener (colon!)</td><td><code>data-on:click="@post('/x')"</code></td></tr>
+          <tr><td><code>data-on:keydown</code></td><td>Keyboard event</td><td><code>data-on:keydown="..."</code></td></tr>
+          <tr><td><code>data-bind="sig"</code></td><td>Two-way binding</td><td><code>data-bind="myInput"</code></td></tr>
+          <tr><td><code>data-bind:sig-name</code></td><td>Two-way (kebab→camel)</td><td><code>data-bind:foo-bar</code> → <code>$fooBar</code></td></tr>
+          <tr><td><code>data-text</code></td><td>Set text content</td><td><code>data-text="$count"</code></td></tr>
+          <tr><td><code>data-show</code></td><td>Show/hide element</td><td><code>data-show="$isOpen"</code></td></tr>
+          <tr><td><code>@get(url)</code></td><td>Fetch via GET (SSE)</td><td><code>@get('/endpoint')</code></td></tr>
+          <tr><td><code>@post(url)</code></td><td>Fetch via POST (SSE)</td><td><code>@post('/endpoint')</code></td></tr>
+        </tbody>
+      </table>
+      <p style="font-size:0.78rem;color:var(--pico-muted-color);margin-top:0.5rem;">
+        <strong>Key rule:</strong> Event attributes use <strong>colon</strong> separators (<code>data-on:click</code>),
+        NOT hyphens (<s>data-on-click</s>). Hyphens silently fail — no error, no request.
+      </p>
+    </article>
+
+  </main>
+
+  {{/* ── Floating debug panel (shared with main app) ── */}}
+  <article id="sandbox-debug" class="debug-panel">
+    <div style="padding:0.4rem 0.75rem;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #30363d;flex-shrink:0;">
+      <div style="display:flex;align-items:center;gap:0.5rem;">
+        <span style="font-size:0.8rem;font-weight:700;color:#58a6ff;">HTTP Debug Log</span>
+        <span style="font-size:0.65rem;color:#8b949e;">(sandbox requests)</span>
+      </div>
+      <div style="display:flex;gap:0.75rem;align-items:center;">
+        <span style="font-size:0.7rem;cursor:pointer;color:#f85149;user-select:none;"
+              data-on:click="@post('/ui/debug/clear')">✕ clear</span>
+        <span style="font-size:0.7rem;cursor:pointer;color:#8b949e;user-select:none;"
+              data-on:click="$debugOpen = !$debugOpen"
+              data-text="$debugOpen ? '▲ collapse' : '▼ expand'">▲ collapse</span>
+      </div>
+    </div>
+    <div data-show="$debugOpen" class="debug-panel-body" id="sandbox-debug-body">
+      <div class="debug-entry" style="color:#8b949e;font-style:italic;">
+        No requests yet. Click any button above to see HTTP calls here.
+      </div>
+    </div>
+  </article>
+</body>
+</html>
