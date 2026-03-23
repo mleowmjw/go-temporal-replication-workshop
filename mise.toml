@@ -4,7 +4,9 @@ _.path = ["~/go/bin"]
 _.file = ".env"
 
 [tools]
+"github:rust-dd/rsql" = "latest"
 go = "1.26"
+usql = "latest"
 
 # ---------------------------------------------------------------------------
 # Session-1: Domain Foundation + Basic Provisioning Workflow

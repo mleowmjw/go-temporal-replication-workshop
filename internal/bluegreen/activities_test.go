@@ -137,17 +137,8 @@ func TestRunAppCompatCheckActivity_BlueRequired_BreaksOnExpand(t *testing.T) {
 	env := activityEnv(t)
 	deps := buildDeps(t)
 	fake := deps.Migrator.(*bluegreen.FakeDatabaseMigrator)
-	fake.ExecuteSQLFn = func(stmts []string) error {
-		_ = stmts
-		return nil
-	}
-	// Override: mark full_name as gone.
-	fake.QueryCheckFn = func(query string) (bluegreen.CheckResult, error) {
-		if contains(query, "full_name") {
-			return bluegreen.CheckResult{}, errors.New(`column "full_name" not found`)
-		}
-		return bluegreen.CheckResult{}, nil
-	}
+	// Simulate a post-contract schema where full_name has been dropped.
+	fake.ApplyContract([]string{"ALTER TABLE inventory.customers DROP COLUMN full_name"})
 
 	acts := bluegreen.NewBGActivities(deps)
 	env.RegisterActivity(acts.RunAppCompatCheckActivity)

@@ -115,6 +115,14 @@ func (f *FakeDatabaseMigrator) validateColumnRefsLocked(query string) error {
 	return nil
 }
 
+// ValidateQuery checks that all columns referenced in the query exist in the
+// fake column registry. Same logic as QueryCheck but returns only an error.
+func (f *FakeDatabaseMigrator) ValidateQuery(ctx context.Context, query string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.validateColumnRefsLocked(query)
+}
+
 func (f *FakeDatabaseMigrator) SetReadOnly(ctx context.Context, readOnly bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

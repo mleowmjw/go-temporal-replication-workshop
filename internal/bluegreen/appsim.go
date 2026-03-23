@@ -98,13 +98,13 @@ func RunAppCompat(ctx context.Context, app AppSimulator, db DatabaseMigrator) Ap
 	result := AppCompatResult{BluePass: true, GreenPass: true}
 
 	for _, q := range app.BlueQueries() {
-		if _, err := db.QueryCheck(ctx, q.SQL); err != nil {
+		if err := db.ValidateQuery(ctx, q.SQL); err != nil {
 			result.BluePass = false
 			result.BlueErrors = append(result.BlueErrors, q.Name+": "+err.Error())
 		}
 	}
 	for _, q := range app.GreenQueries() {
-		if _, err := db.QueryCheck(ctx, q.SQL); err != nil {
+		if err := db.ValidateQuery(ctx, q.SQL); err != nil {
 			result.GreenPass = false
 			result.GreenErrors = append(result.GreenErrors, q.Name+": "+err.Error())
 		}

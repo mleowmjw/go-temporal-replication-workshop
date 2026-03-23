@@ -20,7 +20,9 @@ func validPlan() bluegreen.MigrationPlan {
 			"ALTER TABLE inventory.customers ADD COLUMN phone TEXT",
 		},
 		ContractSQL: []string{
+			"ALTER TABLE inventory.customers DROP COLUMN search_key",
 			"ALTER TABLE inventory.customers DROP COLUMN full_name",
+			"ALTER TABLE inventory.customers ADD COLUMN search_key TEXT GENERATED ALWAYS AS (lower(display_name) || ' ' || lower(email)) STORED",
 		},
 		RollbackSQL: []string{
 			"ALTER TABLE inventory.customers DROP COLUMN IF EXISTS display_name",

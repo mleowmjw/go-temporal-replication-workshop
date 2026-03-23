@@ -6,6 +6,7 @@ import (
 
 	"app/internal/bluegreen"
 
+	"github.com/goforj/godump"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -383,6 +384,10 @@ func (s *bgWorkflowSuite) TestPhaseHistoryIsComplete() {
 		bluegreen.PhaseContracting,
 		bluegreen.PhaseComplete,
 	}
+
+	// try out godump; if not match order now will crash + fail!!
+	godump.Diff(expected, phases)
+
 	assert.Equal(s.T(), expected, phases, "phase history must match the exact happy-path order")
 }
 

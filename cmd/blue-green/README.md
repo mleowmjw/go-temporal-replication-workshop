@@ -293,3 +293,22 @@ docker compose -f cmd/blue-green/compose.workshop.yml down -v
 docker compose -f cmd/blue-green/compose.workshop.yml up
 ```
 This wipes the database and Temporal history and starts clean.
+
+## Contributing 
+
+Run the standalone 
+
+```bash
+$ mise blue-green:dev
+```
+
+Connect with [Paul](https://guillim.github.io/products/paul) or [RSQL](https://rsql.rust-dd.com/) for easy UI.
+Connection string: postgresql://postgres:postgres@localhost:5435/appdb
+
+```bash
+$ usql postgresql://postgres:postgres@localhost:5435/appdb
+
+-- or --
+
+$ rsql postgresql://postgres:postgres@localhost:5435/appdb
+```

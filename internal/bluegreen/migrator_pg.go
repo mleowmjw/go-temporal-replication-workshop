@@ -51,6 +51,19 @@ func (p *PgDatabaseMigrator) QueryCheck(ctx context.Context, query string) (Chec
 	return CheckResult{Count: count}, nil
 }
 
+// ValidateQuery uses PostgreSQL PREPARE to check that a parameterized query is
+// structurally valid (all referenced columns/tables exist, types match) without
+// executing it or requiring actual argument values.
+func (p *PgDatabaseMigrator) ValidateQuery(ctx context.Context, query string) error {
+	const stmtName = "_bg_compat_check"
+	_, err := p.pool.Exec(ctx, "PREPARE "+stmtName+" AS "+query)
+	if err != nil {
+		return fmt.Errorf("validate query %q: %w", truncate(query, 60), err)
+	}
+	_, _ = p.pool.Exec(ctx, "DEALLOCATE "+stmtName)
+	return nil
+}
+
 // SetReadOnly toggles the session-level read-only flag on the current database.
 // Using SET LOCAL is intentionally avoided so that the setting persists beyond
 // the current transaction; a session-level SET is appropriate for the workshop's

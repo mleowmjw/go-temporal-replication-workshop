@@ -24,7 +24,7 @@ const (
 )
 
 // DefaultReadOnlyMaxDuration is the maximum time the database stays read-only during cutover.
-const DefaultReadOnlyMaxDuration = 5 * time.Minute
+const DefaultReadOnlyMaxDuration = 30 * time.Second
 
 // SignalApprove is the Temporal signal name for human approval at each gate.
 const SignalApprove = "approve"

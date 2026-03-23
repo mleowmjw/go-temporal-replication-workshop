@@ -74,10 +74,7 @@ func run(log *slog.Logger) error {
 	}
 	acts := bg.NewBGActivities(deps)
 
-	w := sdkworker.New(tc, bg.TaskQueue, sdkworker.Options{
-		BuildID:                 bg.WorkerBuildID,
-		UseBuildIDForVersioning: true,
-	})
+	w := sdkworker.New(tc, bg.TaskQueue, sdkworker.Options{})
 	bg.RegisterBlueGreenWorker(w, acts)
 
 	if err := w.Start(); err != nil {
@@ -85,7 +82,7 @@ func run(log *slog.Logger) error {
 	}
 	defer w.Stop()
 
-	log.Info("temporal worker started", "task_queue", bg.TaskQueue, "build_id", bg.WorkerBuildID)
+	log.Info("temporal worker started", "task_queue", bg.TaskQueue)
 
 	// ── HTTP server ───────────────────────────────────────────────────────────
 	wfClient := &temporalWorkflowClient{client: tc}

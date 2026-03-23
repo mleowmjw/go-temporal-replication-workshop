@@ -17,7 +17,13 @@ type DatabaseMigrator interface {
 	ExecuteSQL(ctx context.Context, statements []string) error
 
 	// QueryCheck runs a verify query and returns its COUNT(*) result.
+	// The query must be a SELECT COUNT(*) or similar single-row aggregation.
 	QueryCheck(ctx context.Context, query string) (CheckResult, error)
+
+	// ValidateQuery checks that a parameterized SQL statement is structurally
+	// valid against the current schema (columns exist, types are compatible)
+	// without executing it. Used by app-compatibility checks.
+	ValidateQuery(ctx context.Context, query string) error
 
 	// SetReadOnly toggles the database read-only mode.
 	SetReadOnly(ctx context.Context, readOnly bool) error
