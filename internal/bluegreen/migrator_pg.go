@@ -3,6 +3,7 @@ package bluegreen
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -18,24 +19,32 @@ func NewPgDatabaseMigrator(pool *pgxpool.Pool) *PgDatabaseMigrator {
 	return &PgDatabaseMigrator{pool: pool}
 }
 
-// ExecuteSQL runs each statement sequentially within a single transaction.
-// PostgreSQL DDL is transactional, so the entire batch is atomic — on any
-// error the transaction is rolled back and the error is returned.
+// ExecuteSQL runs each statement sequentially. Statements containing
+// CONCURRENTLY (e.g. CREATE/DROP INDEX CONCURRENTLY) cannot run inside a
+// transaction block in PostgreSQL, so they are executed directly on the pool.
+// All other statements are wrapped in a single transaction for atomicity.
 func (p *PgDatabaseMigrator) ExecuteSQL(ctx context.Context, statements []string) error {
-	tx, err := p.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck
-
 	for _, stmt := range statements {
+		upper := strings.ToUpper(stmt)
+		if strings.Contains(upper, "CONCURRENTLY") {
+			// Must run outside a transaction.
+			if _, err := p.pool.Exec(ctx, stmt); err != nil {
+				return fmt.Errorf("execute %q: %w", truncate(stmt, 60), err)
+			}
+			continue
+		}
+		// Transactional DDL (safe to group together).
+		tx, err := p.pool.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("begin transaction: %w", err)
+		}
 		if _, err := tx.Exec(ctx, stmt); err != nil {
+			_ = tx.Rollback(ctx)
 			return fmt.Errorf("execute %q: %w", truncate(stmt, 60), err)
 		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit transaction: %w", err)
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit transaction: %w", err)
+		}
 	}
 	return nil
 }

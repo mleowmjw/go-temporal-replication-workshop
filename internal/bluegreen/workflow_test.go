@@ -98,7 +98,7 @@ func (s *bgWorkflowSuite) TestHappyPath() {
 	s.approveAfter(3 * time.Second)
 	s.approveAfter(4 * time.Second)
 
-	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow, plan)
+	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow, bluegreen.DeploymentRequest{Plan: plan})
 
 	s.True(s.env.IsWorkflowCompleted())
 	require.NoError(s.T(), s.env.GetWorkflowError())
@@ -120,7 +120,7 @@ func (s *bgWorkflowSuite) TestRollbackDuringPlanReview() {
 
 	s.rollbackAfter(500 * time.Millisecond)
 
-	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow, plan)
+	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow, bluegreen.DeploymentRequest{Plan: plan})
 
 	s.True(s.env.IsWorkflowCompleted())
 	require.NoError(s.T(), s.env.GetWorkflowError(), "rollback is a successful compensation, not a failure")
@@ -143,7 +143,7 @@ func (s *bgWorkflowSuite) TestRollbackAfterExpand() {
 	s.approveAfter(1 * time.Second)  // approve plan_review
 	s.rollbackAfter(2 * time.Second) // rollback at expand_verify gate
 
-	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow, plan)
+	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow, bluegreen.DeploymentRequest{Plan: plan})
 
 	s.True(s.env.IsWorkflowCompleted())
 	require.NoError(s.T(), s.env.GetWorkflowError())
@@ -168,7 +168,7 @@ func (s *bgWorkflowSuite) TestRollbackDuringMonitoring() {
 	s.approveAfter(2 * time.Second)  // expand_verify
 	s.rollbackAfter(3 * time.Second) // monitoring rollback
 
-	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow, plan)
+	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow, bluegreen.DeploymentRequest{Plan: plan})
 
 	s.True(s.env.IsWorkflowCompleted())
 	require.NoError(s.T(), s.env.GetWorkflowError())
@@ -194,7 +194,7 @@ func (s *bgWorkflowSuite) TestRollbackAtContractGate() {
 	s.approveAfter(3 * time.Second)  // monitoring
 	s.rollbackAfter(4 * time.Second) // rollback at contract_wait
 
-	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow, plan)
+	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow, bluegreen.DeploymentRequest{Plan: plan})
 
 	s.True(s.env.IsWorkflowCompleted())
 	require.NoError(s.T(), s.env.GetWorkflowError())
@@ -220,7 +220,7 @@ func (s *bgWorkflowSuite) TestExpandVerifyFailure() {
 	// Approve plan_review — expand succeeds but verify fails → auto-compensate.
 	s.approveAfter(1 * time.Second)
 
-	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow, plan)
+	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow, bluegreen.DeploymentRequest{Plan: plan})
 
 	s.True(s.env.IsWorkflowCompleted())
 	require.NoError(s.T(), s.env.GetWorkflowError())
@@ -255,7 +255,7 @@ func (s *bgWorkflowSuite) TestAppCompatCheckedAfterExpand() {
 	s.approveAfter(2 * time.Second)
 	s.approveAfter(3 * time.Second)
 
-	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow, plan)
+	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow, bluegreen.DeploymentRequest{Plan: plan})
 
 	s.True(s.env.IsWorkflowCompleted())
 	require.NoError(s.T(), s.env.GetWorkflowError())
@@ -278,7 +278,7 @@ func (s *bgWorkflowSuite) TestContractRequiresSeparateApproval() {
 	s.approveAfter(3 * time.Second)
 	s.rollbackAfter(4 * time.Second) // must explicitly rollback at contract gate
 
-	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow, plan)
+	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow, bluegreen.DeploymentRequest{Plan: plan})
 
 	s.True(s.env.IsWorkflowCompleted())
 	require.NoError(s.T(), s.env.GetWorkflowError(), "rollback is successful compensation")
@@ -300,7 +300,7 @@ func (s *bgWorkflowSuite) TestReadOnlyReleasedOnRollback() {
 	s.approveAfter(2 * time.Second)  // expand_verify
 	s.rollbackAfter(3 * time.Second) // rollback during monitoring
 
-	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow, plan)
+	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow, bluegreen.DeploymentRequest{Plan: plan})
 
 	s.True(s.env.IsWorkflowCompleted())
 	require.NoError(s.T(), s.env.GetWorkflowError())
@@ -333,7 +333,7 @@ func (s *bgWorkflowSuite) TestPreContractCompatCheckActivityError_TriggersCompen
 		Return(bluegreen.AppCompatCheckResult{},
 			temporal.NewNonRetryableApplicationError("migrator connection lost", "ConnectionError", nil)).Once()
 
-	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow, plan)
+	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow, bluegreen.DeploymentRequest{Plan: plan})
 
 	s.True(s.env.IsWorkflowCompleted())
 	// Compensation succeeds → workflow completes without error.
@@ -363,7 +363,7 @@ func (s *bgWorkflowSuite) TestPhaseHistoryIsComplete() {
 	s.approveAfter(3 * time.Second)
 	s.approveAfter(4 * time.Second)
 
-	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow, plan)
+	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow, bluegreen.DeploymentRequest{Plan: plan})
 	require.NoError(s.T(), s.env.GetWorkflowError())
 
 	result := s.workflowResult()
@@ -417,6 +417,58 @@ func (s *bgWorkflowSuite) TestQueryHandlerReturnsLiveState() {
 	s.approveAfter(3 * time.Second) // monitoring
 	s.approveAfter(4 * time.Second) // contract_wait
 
-	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow, plan)
+	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow, bluegreen.DeploymentRequest{Plan: plan})
 	require.NoError(s.T(), s.env.GetWorkflowError())
+}
+
+// TestParentNotificationOnComplete verifies that SignalDeploymentComplete is sent to
+// the DatabaseOpsWorkflow when the deployment finishes on the happy path.
+func (s *bgWorkflowSuite) TestParentNotificationOnComplete() {
+	plan := validPlan()
+	deps, _ := s.buildWorkflowDeps(plan)
+	acts := bluegreen.NewBGActivities(deps)
+	s.registerAll(acts)
+	s.env.RegisterWorkflow(bluegreen.BlueGreenDeploymentWorkflow)
+
+	// Mock the external signal sent to the parent coordinator on completion.
+	s.env.OnSignalExternalWorkflow(mock.Anything, "db-ops-test-parent", mock.Anything,
+		bluegreen.SignalDeploymentComplete, mock.Anything).
+		Return(nil).Once()
+
+	// Four approval gates.
+	s.approveAfter(1 * time.Second)
+	s.approveAfter(2 * time.Second)
+	s.approveAfter(3 * time.Second)
+	s.approveAfter(4 * time.Second)
+
+	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow,
+		bluegreen.DeploymentRequest{Plan: plan, ParentWorkflowID: "db-ops-test-parent"})
+
+	require.NoError(s.T(), s.env.GetWorkflowError())
+	result := s.workflowResult()
+	assert.Equal(s.T(), bluegreen.PhaseComplete, result.Phase)
+}
+
+// TestParentNotificationOnRollback verifies that a rolled-back deployment also
+// notifies the parent so the coordinator can release the lock.
+func (s *bgWorkflowSuite) TestParentNotificationOnRollback() {
+	plan := validPlan()
+	deps, _ := s.buildWorkflowDeps(plan)
+	acts := bluegreen.NewBGActivities(deps)
+	s.registerAll(acts)
+	s.env.RegisterWorkflow(bluegreen.BlueGreenDeploymentWorkflow)
+
+	// Mock the external signal sent to the parent coordinator on rollback.
+	s.env.OnSignalExternalWorkflow(mock.Anything, "db-ops-test-parent", mock.Anything,
+		bluegreen.SignalDeploymentComplete, mock.Anything).
+		Return(nil).Once()
+
+	s.rollbackAfter(500 * time.Millisecond)
+
+	s.env.ExecuteWorkflow(bluegreen.BlueGreenDeploymentWorkflow,
+		bluegreen.DeploymentRequest{Plan: plan, ParentWorkflowID: "db-ops-test-parent"})
+
+	require.NoError(s.T(), s.env.GetWorkflowError())
+	result := s.workflowResult()
+	assert.Equal(s.T(), bluegreen.PhaseRolledBack, result.Phase)
 }

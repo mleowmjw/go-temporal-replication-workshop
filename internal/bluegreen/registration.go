@@ -10,8 +10,9 @@ const (
 	WorkerBuildID = "blue-green-v1"
 )
 
-// RegisterBlueGreenWorker registers the workflow and all activities with the worker.
+// RegisterBlueGreenWorker registers all workflows and activities with the worker.
 func RegisterBlueGreenWorker(w worker.Worker, acts *BGActivities) {
+	w.RegisterWorkflow(DatabaseOpsWorkflow)
 	w.RegisterWorkflow(BlueGreenDeploymentWorkflow)
 
 	w.RegisterActivity(acts.ValidatePlanActivity)

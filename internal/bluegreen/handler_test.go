@@ -18,12 +18,13 @@ import (
 
 // fakeWorkflowClient is an in-memory stub that implements bluegreen.WorkflowClient.
 type fakeWorkflowClient struct {
-	started   []bluegreen.MigrationPlan
-	approvals []string
-	rollbacks []string
-	startErr  error
-	signalErr error
-	statusFn  func(id string) (bluegreen.DeploymentStatus, error)
+	started    []bluegreen.MigrationPlan
+	approvals  []string
+	rollbacks  []string
+	startErr   error
+	signalErr  error
+	statusFn   func(id string) (bluegreen.DeploymentStatus, error)
+	dbStateErr error
 }
 
 func (f *fakeWorkflowClient) StartDeployment(_ context.Context, plan bluegreen.MigrationPlan) (string, error) {
@@ -55,6 +56,13 @@ func (f *fakeWorkflowClient) GetDeploymentStatus(_ context.Context, id string) (
 		return f.statusFn(id)
 	}
 	return bluegreen.DeploymentStatus{}, bluegreen.ErrDeploymentNotFound
+}
+
+func (f *fakeWorkflowClient) GetDatabaseOpsState(_ context.Context) (bluegreen.DatabaseOpsState, error) {
+	if f.dbStateErr != nil {
+		return bluegreen.DatabaseOpsState{}, f.dbStateErr
+	}
+	return bluegreen.DatabaseOpsState{DatabaseID: "test-db", Environment: bluegreen.EnvDev}, nil
 }
 
 func newTestHandler(t *testing.T) (*bluegreen.Handler, *fakeWorkflowClient) {
@@ -222,4 +230,47 @@ func TestHealthz(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestCreateDeployment_SchemaLocked(t *testing.T) {
+	h, wf := newTestHandler(t)
+	mux := newMux(h)
+
+	wf.startErr = bluegreen.ErrSchemaCurrentlyLocked
+
+	body, _ := json.Marshal(validPlan())
+	req := httptest.NewRequest(http.MethodPost, "/v1/deployments", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	var resp map[string]string
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.Contains(t, resp["error"], "schema lock")
+}
+
+func TestGetDatabaseOpsState_Success(t *testing.T) {
+	h, _ := newTestHandler(t)
+	mux := newMux(h)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/database", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	var state bluegreen.DatabaseOpsState
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&state))
+	assert.Equal(t, "test-db", state.DatabaseID)
+}
+
+func TestGetDatabaseOpsState_NotFound(t *testing.T) {
+	h, wf := newTestHandler(t)
+	mux := newMux(h)
+	wf.dbStateErr = bluegreen.ErrDeploymentNotFound
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/database", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
 }

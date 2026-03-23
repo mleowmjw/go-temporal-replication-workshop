@@ -294,3 +294,124 @@ if temporal.IsWorkflowExecutionAlreadyStartedError(err) {
 
 The HTTP handler then maps `ErrDeploymentAlreadyExists` → `409 Conflict` without
 importing any Temporal packages.
+
+---
+
+## Idiomatic Temporal — Learnings (DatabaseOpsWorkflow / concurrency control)
+
+### 9. `workflow.Go` goroutines must use their own context for blocking calls
+
+`workflow.Go(ctx, func(gCtx workflow.Context) { ... })` creates a new Temporal
+coroutine. **Every blocking call inside it must use `gCtx`** (the parameter
+passed to the closure), never the parent `ctx`. Using the parent context causes:
+
+> `trying to block on coroutine which is already blocked, most likely a wrong
+> Context is used to do blocking call`
+
+This is the workflow equivalent of `time.Sleep` inside workflow code — it breaks
+deterministic replay. The same rule applies to `workflow.NewTimer`, `Future.Get`,
+and `Channel.Receive` inside any `workflow.Go` goroutine.
+
+```go
+// WRONG — ctx is already in use by sel.Select(ctx) on the main coroutine:
+workflow.Go(lockCtx, func(gCtx workflow.Context) {
+    _ = workflow.SignalExternalWorkflow(ctx, id, "", signal, nil).Get(ctx, nil)
+})
+
+// CORRECT — gCtx is scoped to this goroutine:
+workflow.Go(lockCtx, func(gCtx workflow.Context) {
+    _ = workflow.SignalExternalWorkflow(gCtx, id, "", signal, nil).Get(gCtx, nil)
+})
+```
+
+### 10. Update validator errors: use `NewApplicationError` directly
+
+When a `SetUpdateHandlerWithOptions` validator returns an error, return a clean
+`*temporal.ApplicationError` directly. Do **not** use `fmt.Errorf("%w", appErr)`
+to wrap it — the outer `fmt.wrapError` becomes the outermost error in the
+serialised failure chain. The client receives this wrapped form and
+`errors.As(err, &appErr)` finds the wrong type ("wrapError"), causing
+`appErr.Type() == "SchemaLocked"` to be false and breaking error detection.
+
+```go
+// WRONG — fmt.Errorf wraps the ApplicationError; client sees type "wrapError" first:
+return fmt.Errorf("%w: deployment %s is active", ErrSchemaLocked, activeDeployment.PlanID)
+
+// CORRECT — one clean ApplicationError with the right type:
+return temporal.NewApplicationError(
+    fmt.Sprintf("deployment %s is active", activeDeployment.PlanID),
+    "SchemaLocked",
+)
+```
+
+On the client side, always walk the **full error chain** rather than stopping at
+the first `ApplicationError` found:
+
+```go
+func isSchemaLockedError(err error) bool {
+    for e := err; e != nil; e = errors.Unwrap(e) {
+        var appErr *temporal.ApplicationError
+        if errors.As(e, &appErr) && appErr.Type() == "SchemaLocked" {
+            return true
+        }
+    }
+    return strings.Contains(err.Error(), "SchemaLocked") ||
+        strings.Contains(err.Error(), "schema locked")
+}
+```
+
+### 11. DatabaseOpsWorkflow — long-running coordinator pattern
+
+For operations that span many independent workflows (e.g. all deployments to
+the same database), use a single long-lived coordinator workflow per resource:
+
+- **Workflow ID** is derived from the resource identifier (e.g.
+  `db-ops-<fingerprint-of-db-url>`). This gives idempotent start for free.
+- **Update handler** (`SetUpdateHandlerWithOptions`) provides a synchronous
+  lock-request API with a **Validator** that rejects concurrent requests.
+- **`workflow.Go` + `workflow.NewTimer`** implements a per-deployment lock
+  timeout inside the coordinator, sending a rollback signal if the deployment
+  does not finish in time.
+- **`ContinueAsNew`** after 24 hours keeps history size bounded. Defer it
+  until `activeDeployment == nil` by checking `continueAsNewRequested` inside
+  the selector loop rather than adding the timer future a second time.
+- **Signal back**: the deployment workflow signals `SignalDeploymentComplete`
+  to the coordinator on every terminal path (complete, rolled_back, failed) so
+  the lock is always released.
+
+---
+
+## PostgreSQL DDL — Learnings (blue-green activities)
+
+### `CONCURRENTLY` DDL cannot run inside a transaction
+
+`CREATE INDEX CONCURRENTLY` and `DROP INDEX CONCURRENTLY` raise `SQLSTATE 25001`
+if executed inside a transaction block. Detect and run them directly on the pool:
+
+```go
+if strings.Contains(strings.ToUpper(stmt), "CONCURRENTLY") {
+    _, err = pool.Exec(ctx, stmt)  // no transaction
+} else {
+    // normal transactional DDL
+}
+```
+
+### `GENERATED ALWAYS AS … STORED` columns create DROP COLUMN dependencies
+
+If a generated column references another column, `DROP COLUMN` on the referenced
+column fails with `SQLSTATE 2BP01` ("other objects depend on it"). Always use
+`CASCADE` and immediately recreate the generated column referencing the new
+column name:
+
+```sql
+-- ContractSQL for full_name → display_name rename:
+ALTER TABLE inventory.customers DROP COLUMN IF EXISTS full_name CASCADE;
+-- search_key was dropped by CASCADE; recreate it using display_name:
+ALTER TABLE inventory.customers
+  ADD COLUMN IF NOT EXISTS search_key TEXT
+  GENERATED ALWAYS AS (lower(display_name) || ' ' || lower(email)) STORED;
+```
+
+Always use schema-qualified names (`inventory.customers`, not `customers`) when
+the table is not in the `public` schema, since PostgreSQL's `search_path` may
+not include custom schemas by default in connection pools.

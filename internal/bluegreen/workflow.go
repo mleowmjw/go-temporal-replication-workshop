@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"go.temporal.io/sdk/temporal"
+	sdktemporal "go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -12,7 +12,7 @@ import (
 // blue-green activities. DDL operations use longer timeouts.
 var defaultBGActivityOptions = workflow.ActivityOptions{
 	StartToCloseTimeout: 60 * time.Second,
-	RetryPolicy: &temporal.RetryPolicy{
+	RetryPolicy: &sdktemporal.RetryPolicy{
 		MaximumAttempts: 3,
 	},
 }
@@ -22,7 +22,7 @@ var defaultBGActivityOptions = workflow.ActivityOptions{
 var ddlActivityOptions = workflow.ActivityOptions{
 	StartToCloseTimeout: 10 * time.Minute,
 	HeartbeatTimeout:    30 * time.Second,
-	RetryPolicy: &temporal.RetryPolicy{
+	RetryPolicy: &sdktemporal.RetryPolicy{
 		MaximumAttempts: 2,
 	},
 }
@@ -43,10 +43,15 @@ var ddlActivityOptions = workflow.ActivityOptions{
 // State is exposed via the QueryDeploymentState query handler so callers can
 // read the current phase and full history directly from Temporal without an
 // external store.
-func BlueGreenDeploymentWorkflow(ctx workflow.Context, plan MigrationPlan) (DeploymentResult, error) {
+//
+// When req.ParentWorkflowID is non-empty the workflow sends a
+// SignalDeploymentComplete signal to the DatabaseOpsWorkflow on every terminal
+// exit (complete, rolled_back, failed) so the coordinator can release the lock.
+func BlueGreenDeploymentWorkflow(ctx workflow.Context, req DeploymentRequest) (DeploymentResult, error) {
+	plan := req.Plan
 	ctx = workflow.WithActivityOptions(ctx, defaultBGActivityOptions)
 	log := workflow.GetLogger(ctx)
-	log.Info("starting blue-green deployment", "id", plan.ID)
+	log.Info("starting blue-green deployment", "id", plan.ID, "parentWorkflowID", req.ParentWorkflowID)
 
 	// acts is intentionally a nil pointer used only as a type reference so that
 	// workflow.ExecuteActivity can resolve the registered function name via
@@ -70,6 +75,21 @@ func BlueGreenDeploymentWorkflow(ctx workflow.Context, plan MigrationPlan) (Depl
 			Reason: reason,
 		})
 		log.Info("phase transition", "id", plan.ID, "phase", p, "reason", reason)
+	}
+
+	// notifyParent sends a SignalDeploymentComplete signal to the
+	// DatabaseOpsWorkflow coordinator so it can release the schema lock.
+	// It is a no-op when no parent workflow is configured.
+	notifyParent := func(finalPhase Phase) {
+		if req.ParentWorkflowID == "" {
+			return
+		}
+		payload := DeploymentCompletePayload{
+			PlanID:     plan.ID,
+			WorkflowID: workflow.GetInfo(ctx).WorkflowExecution.ID,
+			Phase:      finalPhase,
+		}
+		_ = workflow.SignalExternalWorkflow(ctx, req.ParentWorkflowID, "", SignalDeploymentComplete, payload).Get(ctx, nil)
 	}
 
 	// Register query handler immediately so the workflow is queryable from the
@@ -128,6 +148,7 @@ func BlueGreenDeploymentWorkflow(ctx workflow.Context, plan MigrationPlan) (Depl
 		_ = workflow.ExecuteActivity(compCtx, acts.ExecuteRollbackActivity, plan).Get(compCtx, nil)
 
 		setPhase(PhaseRolledBack, reason)
+		notifyParent(PhaseRolledBack)
 		return DeploymentResult{
 			DeploymentID: plan.ID,
 			Phase:        PhaseRolledBack,
@@ -140,6 +161,7 @@ func BlueGreenDeploymentWorkflow(ctx workflow.Context, plan MigrationPlan) (Depl
 
 	if err := workflow.ExecuteActivity(ctx, acts.ValidatePlanActivity, plan).Get(ctx, nil); err != nil {
 		setPhase(PhaseFailed, err.Error())
+		notifyParent(PhaseFailed)
 		return DeploymentResult{DeploymentID: plan.ID, Phase: PhaseFailed, History: history},
 			fmt.Errorf("plan validation: %w", err)
 	}
@@ -254,6 +276,7 @@ func BlueGreenDeploymentWorkflow(ctx workflow.Context, plan MigrationPlan) (Depl
 	if err := workflow.ExecuteActivity(contractCtx, acts.ExecuteContractActivity, plan).Get(contractCtx, nil); err != nil {
 		// Contract failure is NOT rolled back (DDL may be partially applied).
 		setPhase(PhaseFailed, fmt.Sprintf("contract SQL failed: %v", err))
+		notifyParent(PhaseFailed)
 		return DeploymentResult{DeploymentID: plan.ID, Phase: PhaseFailed, History: history},
 			fmt.Errorf("contract SQL: %w", err)
 	}
@@ -269,6 +292,7 @@ func BlueGreenDeploymentWorkflow(ctx workflow.Context, plan MigrationPlan) (Depl
 	// ─── Phase: complete ──────────────────────────────────────────────────────
 	setPhase(PhaseComplete, "deployment complete")
 	log.Info("blue-green deployment complete", "id", plan.ID)
+	notifyParent(PhaseComplete)
 	return DeploymentResult{
 		DeploymentID: plan.ID,
 		Phase:        PhaseComplete,

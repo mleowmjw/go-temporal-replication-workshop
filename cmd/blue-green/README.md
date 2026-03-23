@@ -76,12 +76,13 @@ curl -s -X POST http://localhost:8083/v1/deployments \
     "ID": "rename-v1",
     "Description": "Add display_name and phone; drop full_name later",
     "ExpandSQL": [
-      "ALTER TABLE inventory.customers ADD COLUMN display_name TEXT",
-      "UPDATE inventory.customers SET display_name = full_name WHERE display_name IS NULL",
-      "ALTER TABLE inventory.customers ADD COLUMN phone TEXT"
+      "ALTER TABLE inventory.customers ADD COLUMN IF NOT EXISTS display_name TEXT",
+      "ALTER TABLE inventory.customers ADD COLUMN IF NOT EXISTS phone TEXT",
+      "UPDATE inventory.customers SET display_name = full_name WHERE display_name IS NULL"
     ],
     "ContractSQL": [
-      "ALTER TABLE inventory.customers DROP COLUMN full_name"
+      "ALTER TABLE inventory.customers DROP COLUMN IF EXISTS full_name CASCADE",
+      "ALTER TABLE inventory.customers ADD COLUMN IF NOT EXISTS search_key TEXT GENERATED ALWAYS AS (lower(display_name) || '"'"' '"'"' || lower(email)) STORED"
     ],
     "RollbackSQL": [
       "ALTER TABLE inventory.customers DROP COLUMN IF EXISTS display_name",
@@ -94,6 +95,12 @@ curl -s -X POST http://localhost:8083/v1/deployments \
     }]
   }'
 ```
+
+> **Why `CASCADE` on the ContractSQL?** The table has a `search_key` generated
+> column (`GENERATED ALWAYS AS (lower(full_name) || ' ' || lower(email))`).
+> Dropping `full_name` without `CASCADE` fails with `SQLSTATE 2BP01`. The
+> `CASCADE` drops the old `search_key` too, and the second statement recreates
+> it referencing `display_name` instead.
 
 You should get back:
 ```json
@@ -193,13 +200,14 @@ docker compose -f cmd/blue-green/compose.workshop.yml \
 
 ---
 
-## Bonus: trigger an emergency rollback
+## Bonus A: trigger an emergency rollback
 
 Reset the database, then run through again and send a `rollback` signal during monitoring instead of approving.
 
 ```bash
 # Reset to original schema
-docker compose -f cmd/blue-green/compose.workshop.yml restart postgres
+docker compose -f cmd/blue-green/compose.workshop.yml down -v
+docker compose -f cmd/blue-green/compose.workshop.yml up -d postgres
 # Wait ~5 seconds for postgres to come back, then:
 
 # Submit a new deployment
@@ -209,11 +217,14 @@ curl -s -X POST http://localhost:8083/v1/deployments \
     "ID": "rename-v2",
     "Description": "Same migration — we will roll this one back",
     "ExpandSQL": [
-      "ALTER TABLE inventory.customers ADD COLUMN display_name TEXT",
-      "UPDATE inventory.customers SET display_name = full_name WHERE display_name IS NULL",
-      "ALTER TABLE inventory.customers ADD COLUMN phone TEXT"
+      "ALTER TABLE inventory.customers ADD COLUMN IF NOT EXISTS display_name TEXT",
+      "ALTER TABLE inventory.customers ADD COLUMN IF NOT EXISTS phone TEXT",
+      "UPDATE inventory.customers SET display_name = full_name WHERE display_name IS NULL"
     ],
-    "ContractSQL": ["ALTER TABLE inventory.customers DROP COLUMN full_name"],
+    "ContractSQL": [
+      "ALTER TABLE inventory.customers DROP COLUMN IF EXISTS full_name CASCADE",
+      "ALTER TABLE inventory.customers ADD COLUMN IF NOT EXISTS search_key TEXT GENERATED ALWAYS AS (lower(display_name) || '"'"' '"'"' || lower(email)) STORED"
+    ],
     "RollbackSQL": [
       "ALTER TABLE inventory.customers DROP COLUMN IF EXISTS display_name",
       "ALTER TABLE inventory.customers DROP COLUMN IF EXISTS phone"
@@ -223,11 +234,11 @@ curl -s -X POST http://localhost:8083/v1/deployments \
 
 # Approve plan_review → expand runs
 curl -s -X POST http://localhost:8083/v1/deployments/rename-v2/approve \
-  -H "Content-Type: application/json" -d '{}'
+  -H "Content-Type: application/json" -d '{"Note":"expand ok"}'
 
 # Approve expand_verify → cutover
 curl -s -X POST http://localhost:8083/v1/deployments/rename-v2/approve \
-  -H "Content-Type: application/json" -d '{}'
+  -H "Content-Type: application/json" -d '{"Note":"compat ok"}'
 
 # Now in monitoring — something went wrong! ROLLBACK instead of approve:
 curl -s -X POST http://localhost:8083/v1/deployments/rename-v2/rollback \
@@ -243,6 +254,104 @@ docker compose -f cmd/blue-green/compose.workshop.yml \
   exec postgres psql -U postgres appdb \
   -c "\d inventory.customers"
 # display_name and phone are gone — back to original schema
+```
+
+---
+
+## Bonus B: schema lock — one database, one deployment at a time
+
+This demo shows how Temporal's workflow ID uniqueness enforces a **database-level
+schema lock** so two engineers can never run competing migrations simultaneously.
+
+Every `POST /v1/deployments` call:
+1. Starts a `DatabaseOpsWorkflow` for this database (idempotent — only one ever
+   runs per database, identified by `db-ops-<fingerprint>`).
+2. Sends a **synchronous Update** to acquire the schema lock.
+3. Only if the Update succeeds does the deployment workflow start.
+
+### See the coordinator
+
+```bash
+# No deployment running yet — coordinator shows no active deployment
+curl -s http://localhost:8083/v1/database
+# → {"DatabaseID":"...","Environment":"dev","ActiveDeployment":null,"CompletedOps":[...]}
+```
+
+### Start a deployment and inspect the lock
+
+```bash
+curl -s -X POST http://localhost:8083/v1/deployments \
+  -H "Content-Type: application/json" \
+  -d '{
+    "ID": "lock-demo",
+    "Description": "Long-running deployment to demonstrate the lock",
+    "ExpandSQL": [
+      "ALTER TABLE inventory.customers ADD COLUMN IF NOT EXISTS notes TEXT"
+    ],
+    "ContractSQL": [
+      "ALTER TABLE inventory.customers ALTER COLUMN notes SET DEFAULT '"'"''"'"'"
+    ],
+    "RollbackSQL": [
+      "ALTER TABLE inventory.customers DROP COLUMN IF EXISTS notes"
+    ]
+  }'
+```
+
+Immediately query the coordinator — the lock is held:
+
+```bash
+curl -s http://localhost:8083/v1/database
+# → "ActiveDeployment":{"PlanID":"lock-demo","WorkflowID":"bg-deploy-lock-demo",...}
+```
+
+### Try to start a second deployment (expect 409)
+
+While `lock-demo` is in `plan_review`, try to start another:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8083/v1/deployments \
+  -H "Content-Type: application/json" \
+  -d '{
+    "ID": "conflicting-deploy",
+    "Description": "This should be blocked",
+    "ExpandSQL": ["SELECT 1"],
+    "ContractSQL": ["SELECT 1"],
+    "RollbackSQL": ["SELECT 1"]
+  }'
+# → 409
+```
+
+The second request is rejected synchronously by the `DatabaseOpsWorkflow`'s
+Update validator — no deployment workflow was even created.
+
+### See it in the Temporal UI
+
+Open [http://localhost:8233](http://localhost:8233):
+- `db-ops-localhost-5435-appdb` — the coordinator, running continuously
+- `bg-deploy-lock-demo` — the deployment, waiting at `plan_review`
+
+The coordinator history shows the Update event; the deployment history shows the
+signal from `lock-demo` once it completes.
+
+### Lock timeout (dev = 5 minutes)
+
+If you leave `lock-demo` sitting at `plan_review` for more than 5 minutes without
+approving it, the coordinator's lock timer fires, sends a rollback signal to the
+deployment workflow, and releases the lock automatically. The coordinator logs:
+
+```
+WARN  schema lock timeout expired — signalling deployment to rollback
+```
+
+After the rollback, the coordinator accepts new deployments again.
+
+### Clean up
+
+```bash
+# Rollback the demo deployment to release the lock
+curl -s -X POST http://localhost:8083/v1/deployments/lock-demo/rollback \
+  -H "Content-Type: application/json" \
+  -d '{"Reason":"demo cleanup"}'
 ```
 
 ---

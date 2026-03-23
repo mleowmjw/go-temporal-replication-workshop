@@ -12,11 +12,18 @@ import (
 // a workflow with the same deployment ID is already running.
 var ErrDeploymentAlreadyExists = errors.New("deployment already exists")
 
+// ErrSchemaCurrentlyLocked is returned by WorkflowClient.StartDeployment when
+// the DatabaseOpsWorkflow rejects the lock request because another deployment
+// is already active on this database.
+var ErrSchemaCurrentlyLocked = errors.New("schema lock held by another deployment")
+
 // WorkflowClient decouples the HTTP handler from the Temporal client.
 // All deployment state is read by querying the running workflow directly.
 type WorkflowClient interface {
-	// StartDeployment starts the BlueGreenDeploymentWorkflow and returns the workflow ID.
-	// Returns ErrDeploymentAlreadyExists if a workflow with the same ID is already running.
+	// StartDeployment acquires the schema lock via DatabaseOpsWorkflow, then
+	// starts the BlueGreenDeploymentWorkflow. Returns the deployment workflow ID.
+	// Returns ErrDeploymentAlreadyExists if a workflow with the same plan ID is running.
+	// Returns ErrSchemaCurrentlyLocked if another deployment holds the schema lock.
 	StartDeployment(ctx context.Context, plan MigrationPlan) (string, error)
 
 	// ApproveDeployment sends the "approve" signal to a running workflow.
@@ -28,6 +35,10 @@ type WorkflowClient interface {
 	// GetDeploymentStatus queries the workflow for its current phase and history.
 	// Returns ErrDeploymentNotFound if no workflow with that ID exists.
 	GetDeploymentStatus(ctx context.Context, deploymentID string) (DeploymentStatus, error)
+
+	// GetDatabaseOpsState queries the DatabaseOpsWorkflow for the coordinator state.
+	// Returns ErrDeploymentNotFound if the coordinator workflow has not been started.
+	GetDatabaseOpsState(ctx context.Context) (DatabaseOpsState, error)
 }
 
 // ErrDeploymentNotFound is returned by WorkflowClient.GetDeploymentStatus when
@@ -51,6 +62,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/deployments/{id}", h.getDeployment)
 	mux.HandleFunc("POST /v1/deployments/{id}/approve", h.approveDeployment)
 	mux.HandleFunc("POST /v1/deployments/{id}/rollback", h.rollbackDeployment)
+	mux.HandleFunc("GET /v1/database", h.getDatabaseOpsState)
 	mux.HandleFunc("GET /healthz", h.healthz)
 }
 
@@ -72,6 +84,10 @@ func (h *Handler) createDeployment(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, ErrDeploymentAlreadyExists) {
 			writeError(w, http.StatusConflict, "deployment already exists: "+plan.ID)
+			return
+		}
+		if errors.Is(err, ErrSchemaCurrentlyLocked) {
+			writeError(w, http.StatusConflict, "schema lock held by another deployment")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "start workflow: "+err.Error())
@@ -128,6 +144,21 @@ func (h *Handler) rollbackDeployment(w http.ResponseWriter, r *http.Request) {
 	}
 	h.log.Info("rollback signal sent", "id", id, "reason", payload.Reason)
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "rollback_requested"})
+}
+
+// getDatabaseOpsState GET /v1/database
+// Returns the DatabaseOpsWorkflow coordinator state (active lock, history).
+func (h *Handler) getDatabaseOpsState(w http.ResponseWriter, r *http.Request) {
+	state, err := h.client.GetDatabaseOpsState(r.Context())
+	if err != nil {
+		if errors.Is(err, ErrDeploymentNotFound) {
+			writeError(w, http.StatusNotFound, "database ops coordinator not started")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, state)
 }
 
 func (h *Handler) healthz(w http.ResponseWriter, _ *http.Request) {

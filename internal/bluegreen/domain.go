@@ -3,6 +3,8 @@ package bluegreen
 import (
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -25,6 +27,129 @@ const (
 
 // DefaultReadOnlyMaxDuration is the maximum time the database stays read-only during cutover.
 const DefaultReadOnlyMaxDuration = 30 * time.Second
+
+// DatabaseOpsWorkflowIDPrefix is the prefix for per-database coordinator workflow IDs.
+const DatabaseOpsWorkflowIDPrefix = "db-ops-"
+
+// UpdateRequestDeployment is the Temporal Update name used to acquire the schema lock.
+const UpdateRequestDeployment = "request_deployment"
+
+// SignalDeploymentComplete is the signal name sent by a deployment workflow to its
+// parent DatabaseOpsWorkflow when it finishes (complete, rolled_back, or failed).
+const SignalDeploymentComplete = "deployment_complete"
+
+// QueryDatabaseOpsState is the Temporal query type for reading the coordinator state.
+const QueryDatabaseOpsState = "database_ops_state"
+
+// ContinueAsNewInterval is how long the DatabaseOpsWorkflow runs before continuing-as-new.
+const ContinueAsNewInterval = 24 * time.Hour
+
+// Environment identifies the deployment environment, which controls the schema lock timeout.
+type Environment string
+
+const (
+	EnvDev     Environment = "dev"
+	EnvStaging Environment = "staging"
+	EnvProd    Environment = "prod"
+)
+
+// LockTimeout returns the maximum duration a schema lock can be held in this environment.
+// dev=5m, staging=30m, prod=24h.
+func (e Environment) LockTimeout() time.Duration {
+	switch e {
+	case EnvStaging:
+		return 30 * time.Minute
+	case EnvProd:
+		return 24 * time.Hour
+	default: // dev and anything unrecognised
+		return 5 * time.Minute
+	}
+}
+
+// DatabaseOpsConfig is the input to DatabaseOpsWorkflow.
+type DatabaseOpsConfig struct {
+	// DatabaseID is the opaque identifier derived from the connection URL fingerprint.
+	DatabaseID  string
+	Environment Environment
+}
+
+// ActiveDeployment describes a currently locked deployment.
+type ActiveDeployment struct {
+	PlanID     string
+	WorkflowID string
+	StartedAt  time.Time
+}
+
+// CompletedDeployment is an entry in the DatabaseOpsWorkflow history.
+type CompletedDeployment struct {
+	PlanID      string
+	WorkflowID  string
+	FinalPhase  Phase
+	CompletedAt time.Time
+}
+
+// DatabaseOpsState is the query response from QueryDatabaseOpsState.
+type DatabaseOpsState struct {
+	DatabaseID       string
+	Environment      Environment
+	ActiveDeployment *ActiveDeployment
+	CompletedOps     []CompletedDeployment
+}
+
+// DeploymentLockRequest is the Update payload for UpdateRequestDeployment.
+type DeploymentLockRequest struct {
+	PlanID     string
+	WorkflowID string
+}
+
+// DeploymentLockResponse is the Update response. On success the caller may proceed
+// to start the deployment workflow.
+type DeploymentLockResponse struct {
+	Granted bool
+}
+
+// DeploymentCompletePayload is the signal payload for SignalDeploymentComplete.
+type DeploymentCompletePayload struct {
+	PlanID     string
+	WorkflowID string
+	Phase      Phase
+}
+
+// DeploymentRequest is the input to BlueGreenDeploymentWorkflow.
+// ParentWorkflowID is optional; when non-empty the workflow sends a
+// SignalDeploymentComplete signal to the DatabaseOpsWorkflow on termination.
+type DeploymentRequest struct {
+	Plan             MigrationPlan
+	ParentWorkflowID string
+}
+
+// DatabaseFingerprint derives a stable, credential-free identifier from a Postgres
+// connection URL for use in the DatabaseOpsWorkflow ID.
+// e.g. "postgres://user:pass@localhost:5435/appdb" → "localhost-5435-appdb"
+func DatabaseFingerprint(databaseURL string) string {
+	u, err := url.Parse(databaseURL)
+	if err != nil || u.Host == "" {
+		// Fallback: sanitise raw string.
+		r := strings.NewReplacer(
+			"://", "-", "/", "-", ":", "-", "@", "-", ".", "-",
+		)
+		return r.Replace(databaseURL)
+	}
+	host := u.Hostname()
+	port := u.Port()
+	dbname := strings.TrimPrefix(u.Path, "/")
+
+	var parts []string
+	// Replace dots in hostname with dashes for a clean ID.
+	parts = append(parts, strings.ReplaceAll(host, ".", "-"))
+	if port != "" {
+		parts = append(parts, port)
+	}
+	if dbname != "" {
+		parts = append(parts, dbname)
+	}
+	return strings.Join(parts, "-")
+}
 
 // SignalApprove is the Temporal signal name for human approval at each gate.
 const SignalApprove = "approve"
