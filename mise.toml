@@ -140,6 +140,10 @@ run = "go build -o bin/blue-green ./cmd/blue-green"
 description = "Start full blue-green stack (Temporal + Postgres 18 + app) via overmind"
 run = "overmind start -f Procfile.blue-green"
 
+[tasks."blue-green:nodb"]
+description = "Start blue-green stack (Temporal + app) w mockDB via overmind"
+run = "overmind start -f Procfile.blue-green-nodb"
+
 [tasks."blue-green"]
 description = "Run blue-green control plane directly (requires Temporal dev server running)"
 run = "mise run blue-green:build && bin/blue-green"
@@ -158,7 +162,7 @@ run = "docker compose -f cmd/blue-green/01-db/compose.yml down -v"
 
 [tasks."blue-green:db:psql"]
 description = "Open psql against blue-green Postgres (port 5435)"
-run = "psql postgresql://postgres:postgres@localhost:5435/appdb"
+run = "usql postgresql://postgres:postgres@localhost:5435/appdb"
 
 [tasks."blue-green:db:logs"]
 description = "Tail blue-green Postgres container logs"

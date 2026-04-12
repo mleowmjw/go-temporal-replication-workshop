@@ -58,11 +58,11 @@ const (
 func (e Environment) LockTimeout() time.Duration {
 	switch e {
 	case EnvStaging:
-		return 15 * time.Minute
+		return 60 * time.Minute
 	case EnvProd:
 		return 24 * time.Hour
 	default: // dev and anything unrecognised
-		return 1 * time.Minute
+		return 10 * time.Minute
 	}
 }
 

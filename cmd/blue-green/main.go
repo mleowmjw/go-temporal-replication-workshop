@@ -48,7 +48,9 @@ func run(log *slog.Logger) error {
 	var migrator bg.DatabaseMigrator
 	var pool *pgxpool.Pool
 	if envOr("BG_MODE", "e2e") == "test" {
-		log.Info("using fake in-memory migrator (BG_MODE=test)")
+		log.Info("===================")
+		log.Info("using ****FAKE**** in-memory migrator (BG_MODE=test)")
+		log.Info("<<<<==<<<<<<<=>>>>>>>=====>>>>")
 		migrator = bg.NewFakeDatabaseMigrator()
 	} else {
 		var err error
